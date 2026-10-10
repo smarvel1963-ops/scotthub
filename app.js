@@ -10,7 +10,7 @@
 "use strict";
 
 const RELAY = "https://script.google.com/macros/s/AKfycbwe4-nvSlI5rVpIJhTprZks_xlv6uOSM5KUzxnXpWkp5rxXVWS3b0tMwzDQgW-X073l/exec";
-const K_PASS = "scotthub.k", K_LAST = "scotthub.last";
+const K_PASS = "scotthub.k", K_LAST = "scotthub.last", K_PAID = "scotthub.paid";
 const STALE_MIN = 15;          // PC writes every 5 min; 3 misses = say so
 const REFRESH_MS = 120000;
 const TZ = "America/Chicago";
@@ -103,13 +103,49 @@ function paintFresh() {
   else { f.className = "fresh " + (a > 60 ? "down" : "stale"); f.textContent = "PC quiet since " + t12(gen) + " (" + ago(a) + ")" + off; }
 }
 
+// ── PAID (Scott 10/10: "needs button for when it paid to remove") ──
+// Scott's tap is final. Kept on this phone; the key carries the due date, so next
+// month's bill or a new alert for the same card shows up again on its own.
+function paidMap() { try { return JSON.parse(store.get(K_PAID) || "{}"); } catch (e) { return {}; } }
+function setPaid(key, on) {
+  const m = paidMap();
+  if (on) m[key] = new Date().toISOString(); else delete m[key];
+  const cut = addDays(todayCT(), -60);                       // forget marks older than 60 days
+  Object.keys(m).forEach(k => { if (m[k].slice(0, 10) < cut) delete m[k]; });
+  store.set(K_PAID, JSON.stringify(m));
+}
+const billKey = x => "bill:" + x.date + "|" + x.name;
+const alertKey = a => "alert:" + (a.id || a.title) + "|" + (a.when || "");
+const isPaid = k => !!paidMap()[k];
+const dueOpen = mo => (mo.due_7d || []).filter(x => !isPaid(billKey(x)));
+const alertsOpen = mo => (mo.alerts || []).filter(a => !isPaid(alertKey(a)));
+
 // ── calendar (read live by the relay from Scott's Google Calendar) ──
-const calEvents = () => (CAL && CAL.ok && CAL.events) || [];
+// Same title + same start on two calendars = one event. An all-day title that repeats on
+// 3+ days (InDebted puts "Unsubscribe from payment reminders" on EVERY day) = one line.
+function calEvents() {
+  const raw = (CAL && CAL.ok && CAL.events) || [], seen = new Set(), out = [];
+  const dayCount = {};
+  raw.forEach(e => { if (e.allDay) dayCount[e.title] = (dayCount[e.title] || 0) + 1; });
+  const shownRepeat = new Set();
+  raw.forEach(e => {
+    const k = e.title + "|" + e.start;
+    if (seen.has(k)) return;
+    seen.add(k);
+    if (e.allDay && dayCount[e.title] >= 3) {
+      if (shownRepeat.has(e.title)) return;
+      shownRepeat.add(e.title);
+      e = Object.assign({}, e, { repeats: dayCount[e.title] });
+    }
+    out.push(e);
+  });
+  return out;
+}
 const evDay = e => e.allDay ? e.start.slice(0, 10) : new Date(e.start).toLocaleDateString("en-CA", { timeZone: TZ });
 const evTime = e => e.allDay ? "All day" : t12(e.start) + (e.end ? " - " + t12(e.end) : "");
 function todayEvents() {
   const t = todayCT(), now = Date.now();
-  return calEvents().filter(e => evDay(e) === t && (e.allDay || new Date(e.end).getTime() > now));
+  return calEvents().filter(e => !e.repeats && evDay(e) === t && (e.allDay || new Date(e.end).getTime() > now));
 }
 
 // ── middle: what needs you ────────────────────────────────────
@@ -127,10 +163,10 @@ function needs() {
   const al = healthAlerts().shown, fails = al.filter(x => x.severity === "FAIL");
   if (fails.length) add("bad", fails.length + " red alert" + (fails.length > 1 ? "s" : "") + " on the PC", fails.slice(0, 2).map(x => x.title).join(" · "), "health");
 
-  const nowA = (mo.alerts || []).filter(x => x.severity === "NOW");
+  const nowA = alertsOpen(mo).filter(x => x.severity === "NOW");
   if (nowA.length) add("bad", nowA.length + " money alert" + (nowA.length > 1 ? "s" : "") + " need you now", nowA.slice(0, 2).map(x => x.title.split("  -  ")[0]).join(" · "), "money");
   const t = todayCT(), tm = addDays(t, 1);
-  const soon = (mo.due_7d || []).filter(x => x.date === t || x.date === tm);
+  const soon = dueOpen(mo).filter(x => x.date === t || x.date === tm);
   if (soon.length) add("warn", soon.length + " bill" + (soon.length > 1 ? "s" : "") + " due today/tomorrow - " + money(soon.reduce((s, x) => s + Number(x.amount || 0), 0)), soon.map(x => x.name).slice(0, 3).join(" · "), "money");
   const fn = mo.cash && mo.cash.first_negative;
   if (fn && fn <= addDays(t, 7)) add("warn", "Cash forecast goes negative " + dayName(fn), "Balances are " + oldestBalance(mo) + " old - check before trusting it", "money");
@@ -169,13 +205,14 @@ function renderGlance() {
     tile("Today", td.record || "-", units(td.units) + (td.pending ? " · " + td.pending + " pending" : ""), sign(td.units)),
     tile("Last 7 days", wk.record || "-", units(wk.units) + (wk.win_pct != null ? " · " + wk.win_pct + "%" : ""), sign(wk.units)),
     tile("Top 5", t5.wins != null ? `${t5.wins}-${t5.losses}-${t5.pushes}` : "-", units(t5.units) + (t5.since ? " since " + dayName(t5.since) : ""), sign(t5.units)),
-    tile("Bills next 7 days", money(mo.due_7d_total), ((mo.due_7d || []).length) + " payments", ""),
+    tile("Bills next 7 days", money(dueOpen(mo).reduce((s, x) => s + Number(x.amount || 0), 0)), dueOpen(mo).length + " still to pay", ""),
   ].join("");
 }
 
 // ── sheets ────────────────────────────────────────────────────
 const row = (l, r, sub, cls) => `<div class="row"><div class="l">${esc(l)}${sub ? `<small>${esc(sub)}</small>` : ""}</div><div class="r ${cls || ""}">${esc(r)}</div></div>`;
 const sec = t => `<div class="sec">${esc(t)}</div>`;
+const payRow = (l, r, sub, cls, key) => `<div class="row"><div class="l">${esc(l)}${sub ? `<small>${esc(sub)}</small>` : ""}</div><div class="r ${cls || ""}">${esc(r)}${key ? `<br><button class="pay" data-paid="${esc(key)}">Paid ✓</button>` : ""}</div></div>`;
 
 const SHEETS = {
   bets: ["🎯 Bets", () => {
@@ -219,10 +256,18 @@ const SHEETS = {
     (c.accounts || []).forEach(a => { h += row(a.name, money(a.balance), "as of " + a.as_of + (a.days_old > 7 ? " · " + a.days_old + " days old" : ""), a.days_old > 14 ? "old" : ""); });
     if (c.low_water != null) h += row("Lowest point ahead", money(c.low_water), c.low_water_date ? dayName(c.low_water_date) : "", sign(c.low_water));
     if (c.first_negative) h += `<p class="note">The forecast goes negative ${esc(dayName(c.first_negative))}, but it starts from balances up to ${esc(oldestBalance(mo))} old.</p>`;
-    h += sec("Due in the next 7 days · " + money(mo.due_7d_total));
-    h += (mo.due_7d || []).map(x => row(x.name, money(x.amount), dayName(x.date) + " · " + (x.kind === "CARD_DUE" ? "card payment" : x.kind.toLowerCase()) + (x.confirmed ? "" : " · not confirmed"))).join("") || `<p class="note">Nothing due.</p>`;
+    const due = dueOpen(mo);
+    h += sec("Due in the next 7 days · " + money(due.reduce((s, x) => s + Number(x.amount || 0), 0)));
+    h += due.map(x => payRow(x.name, money(x.amount), dayName(x.date) + " · " + (x.kind === "CARD_DUE" ? "card payment" : x.kind.toLowerCase()) + (x.confirmed ? "" : " · not confirmed"), "", billKey(x))).join("") || `<p class="note">Nothing left to pay this week.</p>`;
     h += sec("Alerts");
-    h += (mo.alerts || []).map(a => row(a.title, a.amount != null ? money(a.amount) : a.severity, a.severity + (a.when ? " · " + a.when : ""), a.severity === "NOW" ? "neg" : "")).join("") || `<p class="note">No money alerts.</p>`;
+    h += alertsOpen(mo).map(a => payRow(a.title, a.amount != null ? money(a.amount) : a.severity, a.severity + (a.when ? " · " + a.when : ""), a.severity === "NOW" ? "neg" : "", a.severity === "NOW" && a.amount > 0 ? alertKey(a) : null)).join("") || `<p class="note">No money alerts.</p>`;
+    const done = (mo.due_7d || []).filter(x => isPaid(billKey(x))).map(x => [x.name + " · " + dayName(x.date), money(x.amount), billKey(x)])
+      .concat((mo.alerts || []).filter(a => isPaid(alertKey(a))).map(a => [a.title.split("  -  ")[0], a.amount != null ? money(a.amount) : "", alertKey(a)]));
+    if (done.length) {
+      h += sec("Marked paid on this phone");
+      h += done.map(([l, r, k]) => `<div class="row"><div class="l">${esc(l)}<small>${esc(r)}</small></div><div class="r"><button class="pay undo" data-unpaid="${esc(k)}">Undo</button></div></div>`).join("");
+    }
+    h += `<p class="note">Paid marks hide the item on this phone. Marvel Desktop still shows it until the payment is in your books.</p>`;
     return h;
   }],
   business: ["📈 Business", () => {
@@ -254,7 +299,8 @@ const SHEETS = {
     ev.forEach(e => {
       const d = evDay(e);
       if (d !== last) { h += sec(d === todayCT() ? "Today" : d === addDays(todayCT(), 1) ? "Tomorrow" : dayName(d)); last = d; }
-      h += row(e.title || "(no title)", evTime(e), [e.where, e.cal].filter(Boolean).join(" · "));
+      h += row(e.title || "(no title)", e.repeats ? "every day" : evTime(e),
+               [e.repeats ? "repeats " + e.repeats + " days" : "", e.where, e.cal].filter(Boolean).join(" · "));
     });
     if (CAL.more) h += `<p class="note">+${CAL.more} more not shown.</p>`;
     return h;
@@ -303,6 +349,12 @@ function paintScene() {
 
 // ── wiring ────────────────────────────────────────────────────
 document.addEventListener("click", e => {
+  const pd = e.target.closest("[data-paid]"), up = e.target.closest("[data-unpaid]");
+  if (pd || up) {
+    setPaid((pd || up).dataset[pd ? "paid" : "unpaid"], !!pd);
+    renderNeeds(); renderGlance(); openSheet("money");
+    return;
+  }
   const o = e.target.closest("[data-open]");
   if (o) { $("#sheet").dataset.key = o.dataset.open; openSheet(o.dataset.open); return; }
   const a = e.target.closest("[data-act]");
