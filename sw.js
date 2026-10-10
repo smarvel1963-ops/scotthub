@@ -2,7 +2,7 @@
  * Scott Hub offline worker - installable + opens with no signal. NETWORK FIRST:
  * online = newest files; the cache is only the offline fallback. The relay
  * (script.google.com) is never cached here - the app keeps its own last copy. */
-const CACHE = "scotthub-v5";
+const CACHE = "scotthub-v6";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "manifest.json", "icon-192.png", "icon-512.png", "icon-180.png"];
 self.addEventListener("install", e => {
   self.skipWaiting();

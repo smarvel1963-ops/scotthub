@@ -18,7 +18,7 @@ const TZ = "America/Chicago";
 // control folder (found 10/10) - these two alerts are false while the runner reports.
 const FALSE_WHEN_RUNNER_FRESH = /Server ops runner failing|ops-runner heartbeat file is missing/i;
 
-let DATA = null, CAL = null, FETCHED_AT = null, LAST_ERR = null;
+let DATA = null, CAL = null, FETCHED_AT = null, LAST_ERR = null, CAL_FILTER = "all", CAL_EARLY = false;
 
 const $ = s => document.querySelector(s);
 const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -315,18 +315,46 @@ const SHEETS = {
     return h;
   }],
   calendar: ["📅 Calendar", () => {
-    if (!CAL) return `<p class="note">No calendar yet.</p>`;
-    if (!CAL.ok) return `<p class="note">The relay can't read your calendar yet: ${esc(CAL.error)}. It needs the new version deployed and "Allow" clicked once.</p>`;
-    const ev = calEvents();
-    if (!ev.length) return `<p class="note">Nothing on your calendar for the next 7 days.</p>`;
-    let h = "", last = "";
-    ev.forEach(e => {
-      const d = evDay(e);
-      if (d !== last) { h += sec(d === todayCT() ? "Today" : d === addDays(todayCT(), 1) ? "Tomorrow" : dayName(d)); last = d; }
-      h += row(e.title || "(no title)", e.repeats ? "every day" : evTime(e),
-               [e.repeats ? "repeats " + e.repeats + " days" : "", e.where, e.cal].filter(Boolean).join(" · "));
+    // EVERYTHING WE DO (Scott 10/10): Google Calendar + today's card (games) + today's
+    // jobs (Marvel Desktop chores) + bills due, merged by day and time.
+    const items = [], t = todayCT();
+    calEvents().forEach(e => items.push({ day: evDay(e), sort: e.allDay ? "00:00" : new Date(e.start).toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }),
+      icon: "📅", keep: e.allDay, title: e.title || "(no title)", right: e.repeats ? "every day" : evTime(e),
+      sub: [e.repeats ? "repeats " + e.repeats + " days" : "", e.where, e.cal].filter(Boolean).join(" · ") }));
+    const games = {};
+    ((mh().bets || {}).slate || []).forEach(g => {
+      const k = g.start + "|" + g.game;
+      (games[k] = games[k] || { g, bets: [] }).bets.push(g.bet + (g.result ? " (" + g.result + ")" : ""));
     });
-    if (CAL.more) h += `<p class="note">+${CAL.more} more not shown.</p>`;
+    Object.values(games).forEach(({ g, bets }) => items.push({ day: evDay({ start: g.start }), sort: new Date(g.start).toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }),
+      icon: "🎯", title: g.sport + " · " + g.game, right: t12(g.start), sub: bets.join(" · ") }));
+    const jb = dk().jobs || {};
+    (jb.rows || []).forEach(r => items.push({ day: jb.day || t, sort: r.at || "00:00", icon: r.state === "DONE" ? "✅" : r.state === "FAILED" ? "❌" : "⚙️",
+      title: r.title, right: r.at ? t12(jb.day + "T" + r.at + ":00") : "", sub: [r.state.toLowerCase(), r.owner === "SCOTT" ? "yours" : r.owner ? r.owner.toLowerCase() : ""].filter(Boolean).join(" · "),
+      cls: r.state === "FAILED" ? "neg" : "" }));
+    dueOpen(dk().money || {}).forEach(x => items.push({ day: x.date, sort: "00:01", keep: true, icon: "💵", title: x.name, right: money(x.amount),
+      sub: x.kind === "CARD_DUE" ? "card payment due" : "bill due" }));
+    const show = CAL_FILTER === "all" ? items : items.filter(i => i.icon === CAL_FILTER || (CAL_FILTER === "⚙️" && (i.icon === "✅" || i.icon === "❌")));
+    const chips = [["all", "All"], ["📅", "📅 Google"], ["🎯", "🎯 Games"], ["⚙️", "⚙️ Jobs"], ["💵", "💵 Bills"]]
+      .map(([k, l]) => `<button class="chip${CAL_FILTER === k ? " on" : ""}" data-calf="${k}">${l}</button>`).join("");
+    let h = `<div class="chips">${chips}</div>`;
+    if (CAL && !CAL.ok) h += `<p class="note">Google Calendar can't be read: ${esc(CAL.error)}</p>`;
+    if (!show.length) return h + `<p class="note">Nothing here for the next 7 days.</p>`;
+    show.sort((a, b) => (a.day + a.sort).localeCompare(b.day + b.sort));
+    // Today's items that started over an hour ago fold away (all-day rows and bills stay).
+    const hrAgo = new Date(Date.now() - 3600000).toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
+    const early = show.filter(i => i.day === t && !i.keep && i.sort < hrAgo);
+    if (early.length && !CAL_EARLY) {
+      const drop = new Set(early);
+      for (let n = show.length - 1; n >= 0; n--) if (drop.has(show[n])) show.splice(n, 1);
+      h += `<button class="chip" data-calearly="1">Show earlier today (${early.length})</button>`;
+    }
+    let last = "";
+    show.forEach(i => {
+      if (i.day !== last) { h += sec(i.day === t ? "Today" : i.day === addDays(t, 1) ? "Tomorrow" : dayName(i.day)); last = i.day; }
+      h += row(i.icon + " " + i.title, i.right, i.sub, i.cls);
+    });
+    if (CAL && CAL.more) h += `<p class="note">+${CAL.more} more Google events not shown.</p>`;
     return h;
   }],
   todo: ["✅ To-do", () => {
@@ -373,6 +401,9 @@ function paintScene() {
 
 // ── wiring ────────────────────────────────────────────────────
 document.addEventListener("click", e => {
+  const cf = e.target.closest("[data-calf]");
+  if (cf) { CAL_FILTER = cf.dataset.calf; openSheet("calendar"); return; }
+  if (e.target.closest("[data-calearly]")) { CAL_EARLY = true; openSheet("calendar"); return; }
   const pd = e.target.closest("[data-paid]"), up = e.target.closest("[data-unpaid]");
   if (pd || up) {
     setPaid((pd || up).dataset[pd ? "paid" : "unpaid"], !!pd);
