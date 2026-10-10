@@ -300,6 +300,23 @@ const SHEETS = {
     h += `<p class="note">Day Hub / Cruise Hub buyers and Winible aren't connected yet.</p>`;
     return h;
   }],
+  pages: ["📊 Page status", () => {
+    const P = (mh().pages || {});
+    if (P.error) return `<p class="note">PC said: ${esc(P.error)}</p>`;
+    const rows = P.pages || [];
+    if (!rows.length) return `<p class="note">No page data yet.</p>`;
+    const t = todayCT();
+    let h = `<p class="note">Each page's own record - the number on its header. Busiest first (picks in the last 30 days).</p>`;
+    h += sec("Today · last 7 days · last 30 days");
+    rows.forEach(r => {
+      const td = r.today || {}, wk = r.week || {}, mo = r.month || {};
+      const idle = r.last_pick && r.last_pick < addDays(t, -2) ? " · no picks since " + dayName(r.last_pick) : "";
+      h += row(r.page.replace(/_/g, " "), units(wk.units),
+        `today ${td.record}${r.pending ? " (" + r.pending + " pending)" : ""} · week ${wk.record} ${wk.win_pct}% · month ${mo.record} ${units(mo.units)}${idle}`,
+        sign(wk.units));
+    });
+    return h;
+  }],
   ads: ["📣 Ads & posting", () => {
     const a = dk().ads || {};
     if (!a.sections || !a.sections.length) return `<p class="note">No ads report yet.</p>`;
