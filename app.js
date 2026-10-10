@@ -183,6 +183,9 @@ function needs() {
   if (adFails.length) add("warn", "📣 " + adFails.length + " ad channel" + (adFails.length > 1 ? "s" : "") + " failed yesterday",
       adFails.map(r => r.task.replace(/ - .*/, "")).join(" · "), "ads");
   const em = d.email || {};
+  const sl = (em.sales || {}).rows || [], newSale = sl.filter(r => r.date >= addDays(todayCT(), -2));
+  if (newSale.length) add("good", "💰 " + newSale.length + " new sale" + (newSale.length > 1 ? "s" : "") + " (Winible/Whop)",
+      newSale.slice(0, 2).map(r => r.platform + ": " + r.subject).join(" · "), "business");
   if (em.recruiter_count) add("warn", "💼 " + em.recruiter_count + " recruiter message" + (em.recruiter_count > 1 ? "s" : "") + " (last " + em.days + " days)",
       (em.recruiters || []).slice(0, 2).map(r => r.from + ": " + r.subject).join(" · ") + ((em.recruiters || []).some(r => r.archived) ? " - auto-archived, not in your inbox" : ""), "email");
   const deadBox = (em.inboxes || []).filter(i => i.status && i.status !== "ok");
@@ -297,7 +300,11 @@ const SHEETS = {
       h += row("Whop paid", fn.whop_paid ?? "-", "gross " + money(fn.whop_gross));
       h += row("Telegram", fn.telegram ?? "-");
     }
-    h += `<p class="note">Day Hub / Cruise Hub buyers and Winible aren't connected yet.</p>`;
+    const S = (dk().email || {}).sales || {};
+    h += sec("💰 Sales emails (Winible + Whop)");
+    h += row("Last 30 days", "", Object.entries(S.last_30d || {}).map(([p, n]) => p + " " + n).join(" · "));
+    h += (S.rows || []).map(r => row(r.platform + " · " + r.subject, dayName(r.date), r.inbox + (r.archived ? " · was archived" : ""))).join("") || `<p class="note">No sale emails found.</p>`;
+    h += `<p class="note">Counted from the "new subscriber / sale / payout" emails Winible and Whop send - Winible has no API. Day Hub / Cruise Hub (Marvel Corp Whop) buyers aren't connected yet.</p>`;
     return h;
   }],
   cmmg: ["🏢 CMMG", () => {
