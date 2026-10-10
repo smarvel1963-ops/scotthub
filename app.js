@@ -18,7 +18,7 @@ const TZ = "America/Chicago";
 // control folder (found 10/10) - these two alerts are false while the runner reports.
 const FALSE_WHEN_RUNNER_FRESH = /Server ops runner failing|ops-runner heartbeat file is missing/i;
 
-let DATA = null, FETCHED_AT = null, LAST_ERR = null;
+let DATA = null, CAL = null, FETCHED_AT = null, LAST_ERR = null;
 
 const $ = s => document.querySelector(s);
 const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -59,13 +59,13 @@ async function load() {
     const r = await fetch(RELAY, { method: "POST", body: JSON.stringify({ task: "get", pass }) });
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || "relay said no");
-    DATA = j.parts; FETCHED_AT = new Date().toISOString(); LAST_ERR = null;
-    store.set(K_LAST, JSON.stringify({ parts: DATA, at: FETCHED_AT }));
+    DATA = j.parts; CAL = j.calendar || null; FETCHED_AT = new Date().toISOString(); LAST_ERR = null;
+    store.set(K_LAST, JSON.stringify({ parts: DATA, cal: CAL, at: FETCHED_AT }));
   } catch (e) {
     LAST_ERR = String(e.message || e);
     if (!DATA) {
       const c = JSON.parse(store.get(K_LAST) || "null");
-      if (c) { DATA = c.parts; FETCHED_AT = c.at; }
+      if (c) { DATA = c.parts; CAL = c.cal || null; FETCHED_AT = c.at; }
     }
   }
   render();
@@ -103,6 +103,15 @@ function paintFresh() {
   else { f.className = "fresh " + (a > 60 ? "down" : "stale"); f.textContent = "PC quiet since " + t12(gen) + " (" + ago(a) + ")" + off; }
 }
 
+// ── calendar (read live by the relay from Scott's Google Calendar) ──
+const calEvents = () => (CAL && CAL.ok && CAL.events) || [];
+const evDay = e => e.allDay ? e.start.slice(0, 10) : new Date(e.start).toLocaleDateString("en-CA", { timeZone: TZ });
+const evTime = e => e.allDay ? "All day" : t12(e.start) + (e.end ? " - " + t12(e.end) : "");
+function todayEvents() {
+  const t = todayCT(), now = Date.now();
+  return calEvents().filter(e => evDay(e) === t && (e.allDay || new Date(e.end).getTime() > now));
+}
+
 // ── middle: what needs you ────────────────────────────────────
 function needs() {
   const out = [], m = mh(), d = dk(), h = m.health || {}, b = m.bets || {}, mo = d.money || {};
@@ -125,6 +134,13 @@ function needs() {
   if (soon.length) add("warn", soon.length + " bill" + (soon.length > 1 ? "s" : "") + " due today/tomorrow - " + money(soon.reduce((s, x) => s + Number(x.amount || 0), 0)), soon.map(x => x.name).slice(0, 3).join(" · "), "money");
   const fn = mo.cash && mo.cash.first_negative;
   if (fn && fn <= addDays(t, 7)) add("warn", "Cash forecast goes negative " + dayName(fn), "Balances are " + oldestBalance(mo) + " old - check before trusting it", "money");
+
+  const te = todayEvents(), timed = te.filter(e => !e.allDay);
+  if (timed.length) {
+    const nx = timed[0], soon = (new Date(nx.start).getTime() - Date.now()) / 60000;
+    add(soon <= 60 ? "warn" : "", (soon <= 0 ? "Now: " : "Next: ") + t12(nx.start) + " " + nx.title,
+        (nx.where ? nx.where + " · " : "") + te.length + " on your calendar today", "calendar");
+  } else if (te.length) add("", te.length + " all-day item" + (te.length > 1 ? "s" : "") + " today", te.map(e => e.title).slice(0, 2).join(" · "), "calendar");
 
   if (b.today && b.today.pending) add("", b.today.pending + " bet" + (b.today.pending > 1 ? "s" : "") + " still pending today", "Today so far " + b.today.record + " " + units(b.today.units), "bets");
   if (b.open_lives_count) add("", b.open_lives_count + " Lives bet" + (b.open_lives_count > 1 ? "s" : "") + " open", "", "bets");
@@ -229,6 +245,20 @@ const SHEETS = {
     h += `<p class="note">Day Hub / Cruise Hub buyers and Winible aren't connected yet.</p>`;
     return h;
   }],
+  calendar: ["📅 Calendar", () => {
+    if (!CAL) return `<p class="note">No calendar yet.</p>`;
+    if (!CAL.ok) return `<p class="note">The relay can't read your calendar yet: ${esc(CAL.error)}. It needs the new version deployed and "Allow" clicked once.</p>`;
+    const ev = calEvents();
+    if (!ev.length) return `<p class="note">Nothing on your calendar for the next 7 days.</p>`;
+    let h = "", last = "";
+    ev.forEach(e => {
+      const d = evDay(e);
+      if (d !== last) { h += sec(d === todayCT() ? "Today" : d === addDays(todayCT(), 1) ? "Tomorrow" : dayName(d)); last = d; }
+      h += row(e.title || "(no title)", evTime(e), [e.where, e.cal].filter(Boolean).join(" · "));
+    });
+    if (CAL.more) h += `<p class="note">+${CAL.more} more not shown.</p>`;
+    return h;
+  }],
   todo: ["✅ To-do", () => {
     const hl = mh().hot_list || {}, le = (dk().business || {}).loose_ends || {};
     let h = sec("HOT LIST · " + (hl.open_total ?? "?") + " open");
@@ -291,7 +321,7 @@ paintScene();
 tickClock();
 setInterval(tickClock, 20000);
 const cached = JSON.parse(store.get(K_LAST) || "null");
-if (cached) { DATA = cached.parts; FETCHED_AT = cached.at; render(); }
+if (cached) { DATA = cached.parts; CAL = cached.cal || null; FETCHED_AT = cached.at; render(); }
 load();
 setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

@@ -14,6 +14,7 @@
  * Two different secrets on purpose: the phone's pass can only READ, so a lost
  * phone can never overwrite the numbers; the PC key lives only on the PC.
  *
+ * v2: "get" also returns the next 7 days of Google Calendar (read-only, all calendars).
  * Tasks (POST, body JSON):
  *   {task:"put",  key, part:"masterhub"|"desktop", data:{...}}   PC
  *   {task:"get",  pass}                                          phone
@@ -49,7 +50,7 @@ function doPost(e) {
     if (req.task === "get") {
       const parts = {};
       PARTS.forEach(function (p) { parts[p] = getPart(P, p); });
-      return out({ ok: true, now: new Date().toISOString(), parts: parts });
+      return out({ ok: true, now: new Date().toISOString(), parts: parts, calendar: calendar() });
     }
     return out({ error: "unknown task" });
   } catch (err) {
@@ -96,6 +97,33 @@ function getPart(P, part) {
     return { received_at: P.getProperty(part + "_at"), data: JSON.parse(s) };
   } catch (err) {
     return { received_at: P.getProperty(part + "_at"), error: "stored copy unreadable" };
+  }
+}
+
+// v2 (Scott 10/10: "access to calendar for everything we do"): every calendar on Scott's
+// Google account, today + the next CAL_DAYS days, read here at request time so the phone
+// sees it even when the PC is off. Read-only - never creates or changes an event.
+const CAL_DAYS = 7;
+const CAL_MAX = 80;
+function calendar() {
+  try {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const end = new Date(start.getTime() + (CAL_DAYS + 1) * 86400000);
+    const rows = [];
+    CalendarApp.getAllCalendars().forEach(function (cal) {
+      if (cal.isHidden && cal.isHidden()) return;
+      cal.getEvents(start, end).forEach(function (ev) {
+        rows.push({
+          cal: cal.getName(), title: ev.getTitle(), allDay: ev.isAllDayEvent(),
+          start: ev.getStartTime().toISOString(), end: ev.getEndTime().toISOString(),
+          where: ev.getLocation() || ""
+        });
+      });
+    });
+    rows.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
+    return { ok: true, events: rows.slice(0, CAL_MAX), more: Math.max(0, rows.length - CAL_MAX) };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message || err) };   // not authorized yet, etc.
   }
 }
 
