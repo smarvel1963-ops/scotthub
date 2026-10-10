@@ -70,7 +70,7 @@ main { padding: 12px 16px calc(env(safe-area-inset-bottom) + 16px); max-width: 6
 .setup { position: fixed; inset: 0; background: var(--bg); padding: 40px 24px; z-index: 20; }
 .setup h1 { color: var(--accent); }
 
-@media (min-width: 560px) { .bubbles { grid-template-columns: repeat(8, minmax(0, 1fr)); } .glance { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 560px) { .bubbles { grid-template-columns: repeat(9, minmax(0, 1fr)); } .glance { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
 .pay { margin-top: 6px; background: var(--good); color: #04130a; border: 0; border-radius: 4px; padding: 5px 10px; font-weight: 700; font-size: 13px; cursor: pointer; }
 .pay.undo { background: var(--panel); color: var(--text); border: 1px solid var(--line); }

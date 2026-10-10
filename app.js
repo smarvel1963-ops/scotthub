@@ -178,6 +178,10 @@ function needs() {
         (nx.where ? nx.where + " · " : "") + te.length + " on your calendar today", "calendar");
   } else if (te.length) add("", te.length + " all-day item" + (te.length > 1 ? "s" : "") + " today", te.map(e => e.title).slice(0, 2).join(" · "), "calendar");
 
+  const adFails = [].concat(...(((d.ads || {}).sections) || []).filter(s => /^ADS/i.test(s.title)).map(s => s.rows))
+    .filter(r => r.state === "FAILED");
+  if (adFails.length) add("warn", "📣 " + adFails.length + " ad channel" + (adFails.length > 1 ? "s" : "") + " failed yesterday",
+      adFails.map(r => r.task.replace(/ - .*/, "")).join(" · "), "ads");
   const em = d.email || {};
   if (em.recruiter_count) add("warn", "💼 " + em.recruiter_count + " recruiter message" + (em.recruiter_count > 1 ? "s" : "") + " (last " + em.days + " days)",
       (em.recruiters || []).slice(0, 2).map(r => r.from + ": " + r.subject).join(" · ") + ((em.recruiters || []).some(r => r.archived) ? " - auto-archived, not in your inbox" : ""), "email");
@@ -294,6 +298,19 @@ const SHEETS = {
       h += row("Telegram", fn.telegram ?? "-");
     }
     h += `<p class="note">Day Hub / Cruise Hub buyers and Winible aren't connected yet.</p>`;
+    return h;
+  }],
+  ads: ["📣 Ads & posting", () => {
+    const a = dk().ads || {};
+    if (!a.sections || !a.sections.length) return `<p class="note">No ads report yet.</p>`;
+    const ST = { OK: "✅", FAILED: "❌", LATE: "⚠️", UNKNOWN: "❔" };
+    let h = `<p class="note">Marvel Desktop's morning report for ${esc(a.report_day ? dayName(a.report_day) : "?")} (built ${esc(a.built_at ? t12(a.built_at) : "?")}) - it grades yesterday's posting.</p>`;
+    a.sections.forEach(s => {
+      h += sec(s.title);
+      h += s.rows.map(r => row((ST[r.state] || "") + " " + r.task, r.state === "OK" ? "" : r.state,
+        [r.detail, r.fix ? "fix: " + r.fix : ""].filter(Boolean).join(" · "), r.state === "FAILED" ? "neg" : r.state === "LATE" ? "old" : "")).join("");
+    });
+    if ((a.untracked || []).length) h += `<p class="note">Not in the report at all: ${esc(a.untracked.join(", "))} - no posting is tracked there yet.</p>`;
     return h;
   }],
   email: ["📧 Email", () => {
