@@ -178,6 +178,12 @@ function needs() {
         (nx.where ? nx.where + " · " : "") + te.length + " on your calendar today", "calendar");
   } else if (te.length) add("", te.length + " all-day item" + (te.length > 1 ? "s" : "") + " today", te.map(e => e.title).slice(0, 2).join(" · "), "calendar");
 
+  const em = d.email || {};
+  if (em.recruiter_count) add("warn", "💼 " + em.recruiter_count + " recruiter message" + (em.recruiter_count > 1 ? "s" : "") + " (last " + em.days + " days)",
+      (em.recruiters || []).slice(0, 2).map(r => r.from + ": " + r.subject).join(" · ") + ((em.recruiters || []).some(r => r.archived) ? " - auto-archived, not in your inbox" : ""), "email");
+  const deadBox = (em.inboxes || []).filter(i => i.status && i.status !== "ok");
+  if (deadBox.length) add("warn", deadBox.length + " inbox" + (deadBox.length > 1 ? "es" : "") + " can't be read: " + deadBox.map(i => i.inbox).join(", "), "Login refused - mail there isn't being checked", "email");
+
   if (b.today && b.today.pending) add("", b.today.pending + " bet" + (b.today.pending > 1 ? "s" : "") + " still pending today", "Today so far " + b.today.record + " " + units(b.today.units), "bets");
   if (b.open_lives_count) add("", b.open_lives_count + " Lives bet" + (b.open_lives_count > 1 ? "s" : "") + " open", "", "bets");
 
@@ -288,6 +294,24 @@ const SHEETS = {
       h += row("Telegram", fn.telegram ?? "-");
     }
     h += `<p class="note">Day Hub / Cruise Hub buyers and Winible aren't connected yet.</p>`;
+    return h;
+  }],
+  email: ["📧 Email", () => {
+    const em = dk().email || {};
+    if (!em.inboxes) return `<p class="note">No email data yet.</p>`;
+    let h = sec("💼 Recruiters & job offers · last " + em.days + " days");
+    h += (em.recruiters || []).map(r => row(r.from, dayName(r.date), r.subject + " · " + r.inbox + (r.archived ? " · archived" : ""))).join("") || `<p class="note">None found.</p>`;
+    h += `<p class="note">${em.job_alerts || 0} job-alert emails (LinkedIn/Indeed alerts) in the same window - counted, not listed. Archived mail is still in All Mail.</p>`;
+    h += sec("Important mail · " + (em.important_count || 0));
+    h += (em.important || []).map(x => row(x.subject, x.kind.toLowerCase(), dayName(x.date) + " · " + x.from + " · " + x.inbox + (x.unread ? " · unread" : ""), x.kind === "DUE" ? "neg" : "")).join("") || `<p class="note">Nothing important.</p>`;
+    const c = em.cleanup || {};
+    h += sec("Spam & clutter cleanup");
+    h += row("Last cleanup", c.at ? dayName(c.at.slice(0, 10)) + " " + t12(c.at) : "never", c.dry ? "dry run - nothing moved" : "");
+    h += row("Spam to trash", c.spam_trashed ?? "-");
+    h += row("Clutter archived", c.archived ?? "-");
+    h += sec("Inboxes");
+    h += (em.inboxes || []).map(i => row(i.inbox, i.status === "ok" ? (i.unread ?? 0) + " unread" : "NOT READ", i.provider + (i.error ? " · " + i.error : ""), i.status === "ok" ? "" : "neg")).join("");
+    h += `<p class="note">Scanned ${esc(em.built_at ? dayName(em.built_at.slice(0, 10)) + " " + t12(em.built_at) : "?")} by Marvel Desktop.</p>`;
     return h;
   }],
   calendar: ["📅 Calendar", () => {
