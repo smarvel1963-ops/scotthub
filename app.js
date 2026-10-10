@@ -300,6 +300,34 @@ const SHEETS = {
     h += `<p class="note">Day Hub / Cruise Hub buyers and Winible aren't connected yet.</p>`;
     return h;
   }],
+  cmmg: ["🏢 CMMG", () => {
+    const b = mh().bets || {}, po = b.posted || {}, c = dk().cmmg || {};
+    const rec = w => w ? `${w.wins}-${w.losses}${w.pushes ? "-" + w.pushes + "P" : ""} · ${Number(w.win_rate).toFixed(1)}%` : "-";
+    let h = sec("Posted record (the Discord day cards)");
+    if (po.through) {
+      h += row("Last 7 days", units(po.week && po.week.profit), rec(po.week) + " · through " + dayName(po.through), sign(po.week && po.week.profit));
+      h += row("Last 30 days", units(po.month && po.month.profit), rec(po.month), sign(po.month && po.month.profit));
+    }
+    const lp = b.last_published;
+    if (lp && lp.date) h += row("Last posted day · " + dayName(lp.date), units(lp.profit), `${lp.wins}-${lp.losses}${lp.pushes ? "-" + lp.pushes + "P" : ""} · ${lp.win_rate}%`, sign(lp.profit));
+    if (!c.company) return h + `<p class="note">No CMMG books yet.</p>`;
+    h += sec(c.company + " books · built " + (c.built_at || "?"));
+    h += row("Whop revenue (year to date)", money(c.bank.whop_revenue));
+    h += row("Bank balance", money(c.bank.balance), "", sign(c.bank.balance));
+    h += row("Owed to you", money(c.scott.owed), "spent " + money(c.scott.spent) + " · repaid " + money(c.scott.repaid));
+    h += row("Owed to Mooriii", money(c.mooriii.owed), "spent " + money(c.mooriii.spent) + " · repaid " + money(c.mooriii.repaid));
+    h += row("Distributable profit", money(c.distributable_profit), "", sign(c.distributable_profit));
+    h += row("Your 50%", money(c.scott_share), c.dean_share ? "after Dean " + money(c.scott_after_dean) : "", sign(c.scott_share));
+    h += sec("How the profit is worked out");
+    (c.waterfall || []).forEach(w => { h += row(w.step, money(w.amount)); });
+    const months = Object.keys(c.by_month || {}).sort().reverse();
+    if (months.length) {
+      h += sec("Revenue by month");
+      months.forEach(m => { const v = c.by_month[m]; h += row(m, money(v.revenue), v.expense ? "expense " + money(v.expense) : ""); });
+    }
+    h += `<p class="note">Counted only with a bank match or a receipt${c.last_reconciled ? " · workbook last reconciled " + esc(c.last_reconciled) : ""}.</p>`;
+    return h;
+  }],
   pages: ["📊 Page status", () => {
     const P = (mh().pages || {});
     if (P.error) return `<p class="note">PC said: ${esc(P.error)}</p>`;
