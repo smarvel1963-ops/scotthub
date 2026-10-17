@@ -15,17 +15,32 @@
  * phone can never overwrite the numbers; the PC key lives only on the PC.
  *
  * v2: "get" also returns the next 7 days of Google Calendar (read-only, all calendars).
+ *
+ * v3 (Scott 10/17: "approvals and changes through my scott hub app that should be tied to my
+ * claude"): Yes / No on Claude's open questions. A THIRD secret goes in the same property:
+ *   SCOTT_HUB = {"write":"<PC key>","read":"<phone pass>","decide":"<phone decide pass>"}
+ * No "decide" in the property = every tap is refused (the relay's OFF switch). The read pass
+ * can never decide. The decide pass can only answer yes / no to an ID that the PC's newest
+ * snapshot lists as open, quoting that question's sig - so a tap can't invent a question or
+ * answer one that was reworded since. The first tap on an ID + sig is kept; another is
+ * answered "already decided". Nothing here acts on a tap - the PC pulls them.
+ *
  * Tasks (POST, body JSON):
- *   {task:"put",  key, part:"masterhub"|"desktop", data:{...}}   PC
- *   {task:"get",  pass}                                          phone
- *   {task:"ping", pass}                                          phone / setup check
+ *   {task:"put",    key, part:"masterhub"|"desktop", data:{...}}             PC
+ *   {task:"pull",   key}                                     PC: the last 100 taps
+ *   {task:"get",    pass}                                    phone (+ last 30 taps)
+ *   {task:"ping",   pass}                                    phone / setup check
+ *   {task:"decide", dpass, id:"A-017", answer:"yes"|"no", sig, tapped_at}   phone
  * Storage: each part as compact JSON split into <=8,000-char chunks
  * (Script Properties cap one value at ~9 KB), plus the time it arrived.
- * Only the newest copy of each part is kept.
+ * Only the newest copy of each part is kept. Taps: one property each (dec_<seq>), the
+ * newest DEC_KEEP kept.
  */
 const PARTS = ["masterhub", "desktop"];
 const CHUNK = 8000;
 const MAX_PART = 60000;            // a part bigger than this is refused, not stored
+const DEC_KEEP = 100;
+const DEC_SHOWN = 30;
 
 function doPost(e) {
   try {
@@ -45,12 +60,22 @@ function doPost(e) {
       return out({ ok: true, part: req.part, bytes: s.length });
     }
 
+    if (req.task === "pull") {
+      if (!same(req.key, cfg.write)) return out({ error: "wrong write key" });
+      return out({ ok: true, decisions: listDecisions(P, DEC_KEEP) });
+    }
+
+    if (req.task === "decide") return out(decide(P, cfg, req));
+
     if (!same(req.pass, cfg.read)) return out({ error: "wrong passphrase" });
-    if (req.task === "ping") return out({ ok: true, app: "scotthub-relay" });
+    if (req.task === "ping") return out({ ok: true, app: "scotthub-relay", decide: !!cfg.decide });
     if (req.task === "get") {
       const parts = {};
       PARTS.forEach(function (p) { parts[p] = getPart(P, p); });
-      return out({ ok: true, now: new Date().toISOString(), parts: parts, calendar: calendar() });
+      const taps = listDecisions(P, DEC_SHOWN).map(function (d) {
+        return { id: d.id, answer: d.answer, sig: d.sig, tapped_at: d.tapped_at, relay_at: d.relay_at };
+      });
+      return out({ ok: true, now: new Date().toISOString(), parts: parts, calendar: calendar(), decisions: taps });
     }
     return out({ error: "unknown task" });
   } catch (err) {
@@ -98,6 +123,48 @@ function getPart(P, part) {
   } catch (err) {
     return { received_at: P.getProperty(part + "_at"), error: "stored copy unreadable" };
   }
+}
+
+// v3: one Yes / No tap. Checked against the PC's newest masterhub part, never stored blind.
+function decide(P, cfg, req) {
+  if (!cfg.decide) return { error: "approvals aren't switched on in the relay yet" };
+  if (same(cfg.decide, cfg.read) || same(cfg.decide, cfg.write)) return { error: "decide must be its own secret - fix SCOTT_HUB" };
+  if (!same(req.dpass, cfg.decide)) return { error: "wrong decide pass" };
+  const id = String(req.id || ""), answer = String(req.answer || "").toLowerCase(), sig = String(req.sig || "");
+  if (!/^A-\d{3,5}$/.test(id)) return { error: "bad id" };
+  if (answer !== "yes" && answer !== "no") return { error: "answer must be yes or no" };
+  const mh = getPart(P, "masterhub");
+  const ap = mh && mh.data && mh.data.approvals;
+  if (!ap || !ap.enabled) return { error: "approvals are switched off on the PC" };
+  const q = (ap.open || []).filter(function (x) { return x && x.id === id; })[0];
+  if (!q) return { error: id + " isn't an open question (already answered or withdrawn)" };
+  if (q.sig !== sig) return { error: id + " changed since your phone loaded it - refresh and look again" };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const prior = listDecisions(P, DEC_KEEP).filter(function (d) { return d.id === id && d.sig === sig; })[0];
+    if (prior) return { ok: true, already: true, decision: prior };
+    const n = Number(P.getProperty("dec_n") || 0) + 1;
+    const t = Date.parse(String(req.tapped_at || ""));      // a time or nothing - never free text
+    const d = {
+      uid: Utilities.getUuid(), seq: n, id: id, answer: answer, sig: sig,
+      tapped_at: isNaN(t) ? "" : new Date(t).toISOString(), relay_at: new Date().toISOString()
+    };
+    const props = { dec_n: String(n) };
+    props["dec_" + n] = JSON.stringify(d);
+    P.setProperties(props);
+    if (n > DEC_KEEP) P.deleteProperty("dec_" + (n - DEC_KEEP));
+    return { ok: true, decision: d };
+  } finally { lock.releaseLock(); }
+}
+
+// The newest `max` taps, oldest first.
+function listDecisions(P, max) {
+  const all = P.getProperties(), n = Number(all.dec_n || 0), rows = [];
+  for (let i = Math.max(1, n - max + 1); i <= n; i++) {
+    try { if (all["dec_" + i]) rows.push(JSON.parse(all["dec_" + i])); } catch (err) { /* skip a torn one */ }
+  }
+  return rows;
 }
 
 // v2 (Scott 10/10: "access to calendar for everything we do"): every calendar on Scott's

@@ -6,11 +6,19 @@
  * The last good answer is kept on the phone so the app still opens with no signal
  * (it says how old it is).
  * Snapshot writers: C:/MasterHub/scott_hub_snapshot.py + C:/MarvelDesktop/scott_hub_snapshot.py
+ *
+ * v11 APPROVALS (Scott 10/17: "approvals and changes through my scott hub app that should be
+ * tied to my claude"): Yes / No on Claude's open questions (A-001 ...). Needs a SECOND pass,
+ * the decide pass, from its own one-time link (#d=...) - the read pass can't decide. A tap
+ * sends only the id, yes|no and the question's sig; two taps to confirm, and the first answer
+ * stands. The PC (C:/MasterHub/scott_approvals.py) shows "received" back in its snapshot.
  */
 "use strict";
 
 const RELAY = "https://script.google.com/macros/s/AKfycbwe4-nvSlI5rVpIJhTprZks_xlv6uOSM5KUzxnXpWkp5rxXVWS3b0tMwzDQgW-X073l/exec";
 const K_PASS = "scotthub.k", K_LAST = "scotthub.last", K_PAID = "scotthub.paid";
+const K_DEC = "scotthub.d", K_TAPS = "scotthub.taps";
+const CONFIRM_MS = 6000;       // second tap must come within 6 s
 const STALE_MIN = 15;          // PC writes every 5 min; 3 misses = say so
 const REFRESH_MS = 120000;
 const TZ = "America/Chicago";
@@ -19,6 +27,7 @@ const TZ = "America/Chicago";
 const FALSE_WHEN_RUNNER_FRESH = /Server ops runner failing|ops-runner heartbeat file is missing/i;
 
 let DATA = null, CAL = null, FETCHED_AT = null, LAST_ERR = null, CAL_FILTER = "all", CAL_EARLY = false;
+let RELAY_TAPS = [], ARMED = null, SENDING = false;
 
 const $ = s => document.querySelector(s);
 const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -44,11 +53,10 @@ function addDays(ymd, n) { const d = new Date(ymd + "T12:00:00"); d.setDate(d.ge
 
 // ── setup: pass from #k= once ─────────────────────────────────
 function takePassFromLink() {
-  const m = location.hash.match(/[#&]k=([^&]+)/);
-  if (m) {
-    store.set(K_PASS, decodeURIComponent(m[1]));
-    history.replaceState(null, "", location.pathname + location.search);
-  }
+  const m = location.hash.match(/[#&]k=([^&]+)/), d = location.hash.match(/[#&]d=([^&]+)/);
+  if (m) store.set(K_PASS, decodeURIComponent(m[1]));
+  if (d) store.set(K_DEC, decodeURIComponent(d[1]));
+  if (m || d) history.replaceState(null, "", location.pathname + location.search);
 }
 
 // ── fetch ─────────────────────────────────────────────────────
@@ -59,13 +67,13 @@ async function load() {
     const r = await fetch(RELAY, { method: "POST", body: JSON.stringify({ task: "get", pass }) });
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || "relay said no");
-    DATA = j.parts; CAL = j.calendar || null; FETCHED_AT = new Date().toISOString(); LAST_ERR = null;
-    store.set(K_LAST, JSON.stringify({ parts: DATA, cal: CAL, at: FETCHED_AT }));
+    DATA = j.parts; CAL = j.calendar || null; RELAY_TAPS = j.decisions || []; FETCHED_AT = new Date().toISOString(); LAST_ERR = null;
+    store.set(K_LAST, JSON.stringify({ parts: DATA, cal: CAL, taps: RELAY_TAPS, at: FETCHED_AT }));
   } catch (e) {
     LAST_ERR = String(e.message || e);
     if (!DATA) {
       const c = JSON.parse(store.get(K_LAST) || "null");
-      if (c) { DATA = c.parts; CAL = c.cal || null; FETCHED_AT = c.at; }
+      if (c) { DATA = c.parts; CAL = c.cal || null; RELAY_TAPS = c.taps || []; FETCHED_AT = c.at; }
     }
   }
   render();
@@ -148,6 +156,66 @@ function todayEvents() {
   return calEvents().filter(e => !e.repeats && evDay(e) === t && (e.allDay || new Date(e.end).getTime() > now));
 }
 
+// ── approvals (v11) ───────────────────────────────────────────
+// What the relay or this phone already holds for THIS wording (id + sig) of a question.
+const ap = () => mh().approvals || {};
+const apOpen = () => ap().open || [];
+const tapKey = q => q.id + "|" + q.sig;
+function tapsMap() { try { return JSON.parse(store.get(K_TAPS) || "{}"); } catch (e) { return {}; } }
+function setTap(k, v) {
+  const m = tapsMap(), cut = Date.now() - 30 * 86400000;
+  m[k] = v;
+  Object.keys(m).forEach(x => { if (new Date(m[x].at).getTime() < cut) delete m[x]; });
+  store.set(K_TAPS, JSON.stringify(m));
+}
+function tapFor(q) {
+  const r = RELAY_TAPS.filter(d => d.id === q.id && d.sig === q.sig)[0];
+  if (r) return { answer: r.answer, at: r.relay_at };
+  const l = tapsMap()[tapKey(q)];
+  return l && l.state === "sent" ? { answer: l.answer, at: l.at } : null;
+}
+const apWaiting = () => apOpen().filter(q => !tapFor(q));
+const when = iso => iso ? new Date(iso).toLocaleDateString("en-US", { timeZone: TZ, month: "short", day: "numeric" }) + " " + t12(iso) : "";
+
+function apCard(q, can) {
+  const t = tapFor(q), l = tapsMap()[tapKey(q)];
+  let right;
+  if (t) right = `<b class="${t.answer === "yes" ? "pos" : "neg"}">${esc(t.answer.toUpperCase())}</b><small>sent ${esc(t12(t.at))} · the PC picks it up within 5 min</small>`;
+  else if (!can) right = `<small>this phone can't answer</small>`;
+  else {
+    const armed = a => ARMED && ARMED.k === tapKey(q) && ARMED.answer === a;
+    const btn = a => `<button class="pay${a === "no" ? " undo" : ""}${armed(a) ? " armed" : ""}" data-ap="${esc(q.id)}" data-ans="${a}"${SENDING ? " disabled" : ""}>${armed(a) ? "Tap again: " + a.toUpperCase() : a === "yes" ? "Yes" : "No"}</button>`;
+    right = btn("yes") + " " + btn("no") + (l && l.state === "error" ? `<small class="neg">${esc(l.err)}</small>` : "");
+  }
+  return `<div class="row"><div class="l">${esc(q.id)} · ${esc(q.ask)}<small>Claude: ${esc(q.rec)}${q.why ? " · " + esc(q.why) : ""}</small></div><div class="r">${right}</div></div>`;
+}
+
+// Two taps: the first arms the button, the second (within CONFIRM_MS) sends. Only the id,
+// yes|no and the sig leave the phone - never typed text.
+async function sendTap(id, answer) {
+  const q = apOpen().filter(x => x.id === id)[0];
+  if (!q || SENDING) return;
+  const k = tapKey(q);
+  if (!ARMED || ARMED.k !== k || ARMED.answer !== answer || Date.now() - ARMED.at > CONFIRM_MS) {
+    const mine = ARMED = { k, answer, at: Date.now() };
+    openSheet("approvals");
+    setTimeout(() => { if (ARMED === mine) { ARMED = null; if ($("#sheet").dataset.key === "approvals") openSheet("approvals"); } }, CONFIRM_MS);
+    return;
+  }
+  ARMED = null; SENDING = true; openSheet("approvals");
+  try {
+    const r = await fetch(RELAY, { method: "POST", body: JSON.stringify({ task: "decide", dpass: store.get(K_DEC), id: q.id, answer, sig: q.sig, tapped_at: new Date().toISOString() }) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "relay said no");
+    const d = j.decision || {};       // "already": the earlier answer stands
+    setTap(k, { state: "sent", answer: d.answer || answer, at: d.relay_at || new Date().toISOString() });
+  } catch (e) {
+    setTap(k, { state: "error", answer, at: new Date().toISOString(), err: "Not sent: " + String(e.message || e) });
+  }
+  SENDING = false;
+  await load();
+}
+
 // ── middle: what needs you ────────────────────────────────────
 function needs() {
   const out = [], m = mh(), d = dk(), h = m.health || {}, b = m.bets || {}, mo = d.money || {};
@@ -155,6 +223,8 @@ function needs() {
 
   const a = ageMin(m.generated_at);
   if (a != null && a > STALE_MIN) add(a > 60 ? "bad" : "warn", "PC hasn't reported since " + t12(m.generated_at), "Numbers below are from then. PC off, asleep, or the upload stopped.", "health");
+  const qs = ap().enabled ? apWaiting() : [];
+  if (qs.length) add("warn", "🗳️ " + qs.length + " question" + (qs.length > 1 ? "s" : "") + " from Claude", qs.slice(0, 2).map(q => q.id + " " + q.ask).join(" · "), "approvals");
   if (h.pc && h.pc.active === false) add("warn", h.pc.handed_to_server ? "PC handed the operation to the server" : "MasterHub app isn't running on the PC", "Last PC heartbeat " + ago(h.pc.heartbeat_age_min), "health");
   const sv = h.server || {};
   if (sv.alive === false) add("bad", "Server isn't checking in", "Last heartbeat " + ago(sv.heartbeat_age_min), "health");
@@ -426,6 +496,23 @@ const SHEETS = {
     if (CAL && CAL.more) h += `<p class="note">+${CAL.more} more Google events not shown.</p>`;
     return h;
   }],
+  approvals: ["🗳️ Approvals", () => {
+    const a = ap();
+    if (!a.enabled) return `<p class="note">Approvals are switched off on the PC.</p>`;
+    if (a.error) return `<p class="note">PC said: ${esc(a.error)}</p>`;
+    const can = !!store.get(K_DEC), open = apOpen();
+    let h = `<p class="note">Claude's open questions - Yes or No only. Your first answer stands; to change it, tell Claude at the PC.</p>`;
+    if (!can) h += `<p class="note">This phone can read but can't answer yet: open the approvals link from your email on this phone, once.</p>`;
+    h += sec("Waiting on you · " + apWaiting().length);
+    h += open.length ? open.map(q => apCard(q, can)).join("") : `<p class="note">No open questions.</p>`;
+    if (a.open_total > open.length) h += `<p class="note">+${a.open_total - open.length} more waiting - they show here as these are answered.</p>`;
+    const rc = a.received || [];
+    h += sec("Received by the PC");
+    h += rc.length ? rc.map(d => row(d.id + (d.ask ? " · " + d.ask : ""), String(d.answer || "").toUpperCase() + (d.status === "accepted" ? " ✓" : ""),
+      (d.status === "accepted" ? "received " : "not used - " + d.why + " · ") + when(d.received_at), d.status === "accepted" ? "pos" : "neg")).join("")
+      : `<p class="note">Nothing received yet.</p>`;
+    return h;
+  }],
   todo: ["✅ To-do", () => {
     const hl = mh().hot_list || {}, le = (dk().business || {}).loose_ends || {};
     let h = sec("HOT LIST · " + (hl.open_total ?? "?") + " open");
@@ -447,6 +534,7 @@ function openSheet(key) {
 function render() {
   paintFresh();
   if (!DATA) { $("#needs").innerHTML = `<li class="bad">Can't load yet${LAST_ERR ? `<small>${esc(LAST_ERR)}</small>` : ""}</li>`; return; }
+  $("#apBubble").classList.toggle("hidden", !ap().enabled);
   renderNeeds();
   renderGlance();
   const open = $("#sheet:not(.hidden)") && $("#sheet").dataset.key;
@@ -473,6 +561,8 @@ document.addEventListener("click", e => {
   const cf = e.target.closest("[data-calf]");
   if (cf) { CAL_FILTER = cf.dataset.calf; openSheet("calendar"); return; }
   if (e.target.closest("[data-calearly]")) { CAL_EARLY = true; openSheet("calendar"); return; }
+  const apb = e.target.closest("[data-ap]");
+  if (apb) { if (!apb.disabled) sendTap(apb.dataset.ap, apb.dataset.ans); return; }
   const pd = e.target.closest("[data-paid]"), up = e.target.closest("[data-unpaid]");
   if (pd || up) {
     setPaid((pd || up).dataset[pd ? "paid" : "unpaid"], !!pd);
@@ -493,11 +583,12 @@ document.addEventListener("keydown", e => {
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
 
 takePassFromLink();
+window.addEventListener("hashchange", () => { takePassFromLink(); load(); });   // link opened while the app is up
 paintScene();
 tickClock();
 setInterval(tickClock, 20000);
 const cached = JSON.parse(store.get(K_LAST) || "null");
-if (cached) { DATA = cached.parts; CAL = cached.cal || null; FETCHED_AT = cached.at; render(); }
+if (cached) { DATA = cached.parts; CAL = cached.cal || null; RELAY_TAPS = cached.taps || []; FETCHED_AT = cached.at; render(); }
 load();
 setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
