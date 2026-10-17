@@ -25,8 +25,18 @@
  * answer one that was reworded since. The first tap on an ID + sig is kept; another is
  * answered "already decided". Nothing here acts on a tap - the PC pulls them.
  *
+ * v4 (Scott 10/17: "what makes the server do all same stuff when pc is off?"): a THIRD part,
+ * "server" - the server's own health (heartbeat, bots, ops runner, its alerts; never bets or
+ * money), sent by C:/MasterHub/scott_hub_server.py while the PC is off. It has its OWN key in its
+ * OWN Script Property, so the PC write key never goes to the server:
+ *   SCOTT_HUB_SERVER = <server key>      (a plain value; any capitals)
+ * The server key can put the "server" part and nothing else (no get, pull, decide or PC part),
+ * and the PC write key can't put "server". No SCOTT_HUB_SERVER = server puts refused (the relay's
+ * OFF switch for this). A server key equal to write / read / decide is ignored.
+ *
  * Tasks (POST, body JSON):
  *   {task:"put",    key, part:"masterhub"|"desktop", data:{...}}             PC
+ *   {task:"put",    key:<server key>, part:"server", data:{...}}             server (v4)
  *   {task:"pull",   key}                                     PC: the last 100 taps
  *   {task:"get",    pass}                                    phone (+ last 30 taps)
  *   {task:"ping",   pass}                                    phone / setup check
@@ -38,9 +48,10 @@
  * Only the newest copy of each part is kept. Taps: one property each (dec_<seq>), the
  * newest DEC_KEEP kept.
  */
-const PARTS = ["masterhub", "desktop"];
+const PARTS = ["masterhub", "desktop", "server"];
 const CHUNK = 8000;
 const MAX_PART = 60000;            // a part bigger than this is refused, not stored
+const MAX_SERVER_PART = 20000;     // the server's report is ~3-6 KB
 const DEC_KEEP = 100;
 const DEC_SHOWN = 30;
 
@@ -52,10 +63,15 @@ function doPost(e) {
     if (cfg.error) return out(cfg);
 
     if (req.task === "put") {
-      if (!same(req.key, cfg.write)) return out({ error: "wrong write key" });
+      if (req.part === "server") {             // v4: the server's own key, this part only
+        if (cfg.server_error) return out({ error: cfg.server_error });
+        if (!cfg.server) return out({ error: "server reports aren't switched on in the relay yet" });
+        if (!same(req.key, cfg.server)) return out({ error: "wrong server key" });
+      } else if (!same(req.key, cfg.write)) return out({ error: "wrong write key" });
       if (PARTS.indexOf(req.part) < 0) return out({ error: "unknown part" });
       const s = JSON.stringify(req.data || {});
-      if (s.length > MAX_PART) return out({ error: "part too big: " + s.length });
+      const cap = req.part === "server" ? MAX_SERVER_PART : MAX_PART;
+      if (s.length > cap) return out({ error: "part too big: " + s.length });
       const lock = LockService.getScriptLock();
       lock.waitLock(10000);
       try { putPart(P, req.part, s); } finally { lock.releaseLock(); }
@@ -70,7 +86,7 @@ function doPost(e) {
     if (req.task === "decide") return out(decide(P, cfg, req));
 
     if (!same(req.pass, cfg.read)) return out({ error: "wrong passphrase" });
-    if (req.task === "ping") return out({ ok: true, app: "scotthub-relay", decide: !!cfg.decide });
+    if (req.task === "ping") return out({ ok: true, app: "scotthub-relay", decide: !!cfg.decide, server: !!cfg.server });
     if (req.task === "get") {
       const parts = {};
       PARTS.forEach(function (p) { parts[p] = getPart(P, p); });
@@ -92,13 +108,22 @@ function config(P) {
   let raw = null;
   for (const k in all) if (k.trim().toUpperCase() === "SCOTT_HUB") raw = all[k];
   if (!raw) return { error: "relay has no SCOTT_HUB property yet" };
+  let c;
   try {
-    const c = JSON.parse(raw);
-    if (!c.write || !c.read) return { error: "SCOTT_HUB needs both write and read" };
-    return c;
+    c = JSON.parse(raw);
   } catch (err) {
     return { error: "SCOTT_HUB is not valid JSON - paste it again" };
   }
+  if (!c || !c.write || !c.read) return { error: "SCOTT_HUB needs both write and read" };
+  // v4: the server's key lives in its own property; never one taken from SCOTT_HUB.
+  delete c.server;
+  let sk = null;
+  for (const k in all) if (k.trim().toUpperCase() === "SCOTT_HUB_SERVER") sk = String(all[k] || "").trim();
+  if (sk) {
+    if (same(sk, c.write) || same(sk, c.read) || (c.decide && same(sk, c.decide))) c.server_error = "SCOTT_HUB_SERVER must be its own secret - fix it";
+    else c.server = sk;
+  }
+  return c;
 }
 
 // Exact match after trimming (these are long random keys, not typed words).

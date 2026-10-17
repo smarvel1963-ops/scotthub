@@ -15,6 +15,10 @@
  * v12 FIX IT (Scott 10/17): each open fail on Health has a two-tap "Fix it" (sends the F- id + sig
  * only). Claude builds the fix switched OFF and offers it back as an A- question; its status
  * (requested / working / fix ready / needs you at the PC / cleared) comes from scott_repairs.py.
+ * v13 SERVER REPORT (Scott 10/17: "what makes the server do all same stuff when pc is off?"): a third
+ * part, "server", sent by the server itself (C:/MasterHub/scott_hub_server.py) every 5 min while the PC
+ * is off - heartbeat, bots, ops runner, its alerts; never bets or money. When the PC's part is stale and
+ * the server's is fresh, the top line reads "PC off - server report" and Health leads with it.
  */
 "use strict";
 
@@ -23,6 +27,7 @@ const K_PASS = "scotthub.k", K_LAST = "scotthub.last", K_PAID = "scotthub.paid";
 const K_DEC = "scotthub.d", K_TAPS = "scotthub.taps";
 const CONFIRM_MS = 6000;       // second tap must come within 6 s
 const STALE_MIN = 15;          // PC writes every 5 min; 3 misses = say so
+const SERVER_STALE_MIN = 15;   // the server writes every 5 min while the PC is off
 const REFRESH_MS = 120000;
 const TZ = "America/Chicago";
 // ops_sentinel reads data\server_ops_status.json, but the real file is in the Drive
@@ -84,6 +89,16 @@ async function load() {
 
 const mh = () => (DATA && DATA.masterhub && DATA.masterhub.data) || {};
 const dk = () => (DATA && DATA.desktop && DATA.desktop.data) || {};
+// v13: the server's own report. Its numbers and words are shown escaped, never trusted as markup.
+const arr = x => Array.isArray(x) ? x : [];
+const obj = x => (x && typeof x === "object" && !Array.isArray(x)) ? x : {};
+const sv13 = () => obj(DATA && DATA.server && DATA.server.data);
+const svAlerts = S => arr(S.alerts).filter(x => x && typeof x === "object" && !Array.isArray(x));
+// Age by the relay's clock (when it arrived), not the server's - a skewed server clock can't fake "fresh".
+const svAge = () => ageMin((DATA && DATA.server && DATA.server.received_at) || sv13().generated_at);
+const pcStale = () => { const a = ageMin(mh().generated_at); return a == null || a > STALE_MIN; };
+// "PC off - server report": the PC's part is stale and the server's is fresh.
+const serverOn = () => { const a = svAge(); return pcStale() && a != null && a <= SERVER_STALE_MIN; };
 
 function healthAlerts() {
   const h = mh().health || {};
@@ -108,8 +123,9 @@ function paintFresh() {
   const gen = mh().generated_at;
   const a = ageMin(gen);
   if (!DATA) { f.className = "fresh down"; f.textContent = LAST_ERR ? "Can't reach the relay - " + LAST_ERR : "connecting…"; return; }
-  if (a == null) { f.className = "fresh down"; f.textContent = "No report from the PC yet"; return; }
   const off = LAST_ERR ? " · offline copy" : "";
+  if (serverOn()) { f.className = "fresh stale"; f.textContent = "PC off - server report " + ago(svAge()) + (a != null ? " · PC quiet since " + t12(gen) : "") + off; return; }
+  if (a == null) { f.className = "fresh down"; f.textContent = "No report from the PC yet"; return; }
   if (a <= STALE_MIN) { f.className = "fresh ok"; f.textContent = "PC report " + ago(a) + off; }
   else { f.className = "fresh " + (a > 60 ? "down" : "stale"); f.textContent = "PC quiet since " + t12(gen) + " (" + ago(a) + ")" + off; }
 }
@@ -254,17 +270,29 @@ function needs() {
   const out = [], m = mh(), d = dk(), h = m.health || {}, b = m.bets || {}, mo = d.money || {};
   const add = (cls, text, sub, open) => out.push({ cls, text, sub, open });
 
-  const a = ageMin(m.generated_at);
-  if (a != null && a > STALE_MIN) add(a > 60 ? "bad" : "warn", "PC hasn't reported since " + t12(m.generated_at), "Numbers below are from then. PC off, asleep, or the upload stopped.", "health");
+  const a = ageMin(m.generated_at), S = serverOn() ? sv13() : null;
+  if (S) add("warn", "PC off - server report", (a != null ? "PC quiet since " + t12(m.generated_at) + ". " : "") + "The server checks in every 5 min - its health is under Health. Bets and money are the PC's from then.", "health");
+  else if (a != null && a > STALE_MIN) {
+    add(a > 60 ? "bad" : "warn", "PC hasn't reported since " + t12(m.generated_at), "Numbers below are from then. PC off, asleep, or the upload stopped.", "health");
+    if (DATA.server && a > 30) add("warn", "No server report either - last one " + ago(svAge()), "The server sends one only while it sees the PC off.", "health");
+  }
+  if (S) {
+    const sa = svAlerts(S), sf = sa.filter(x => x.severity === "FAIL"), sw = sa.length - sf.length, bots = Object.entries(obj(S.bots));
+    if (sf.length) add("bad", sf.length + " red alert" + (sf.length > 1 ? "s" : "") + " on the server", sf.slice(0, 2).map(x => x.title).join(" · "), "health");
+    else add(obj(S.runner).running_operation === true && !sw ? "good" : "warn", "Server up · " + bots.filter(([, up]) => up === true).length + "/" + bots.length + " bots running",
+             (obj(S.runner).text || "") + (sw ? " · " + sw + " yellow alert" + (sw > 1 ? "s" : "") + " under Health" : ""), "health");
+  }
   const qs = ap().enabled ? apWaiting() : [];
   if (qs.length) add("warn", "🗳️ " + qs.length + " question" + (qs.length > 1 ? "s" : "") + " from Claude", qs.slice(0, 2).map(q => q.id + " " + q.ask).join(" · "), "approvals");
   const ready = fx().enabled ? fxList().filter(f => f.status === "fix_ready") : [];
   if (ready.length) add("good", "✅ " + ready.length + " fix" + (ready.length > 1 ? "es" : "") + " ready for your Yes", ready.slice(0, 2).map(f => f.title).join(" · "), "approvals");
   if (h.pc && h.pc.active === false) add("warn", h.pc.handed_to_server ? "PC handed the operation to the server" : "MasterHub app isn't running on the PC", "Last PC heartbeat " + ago(h.pc.heartbeat_age_min), "health");
   const sv = h.server || {};
-  if (sv.alive === false) add("bad", "Server isn't checking in", "Last heartbeat " + ago(sv.heartbeat_age_min), "health");
-  const down = Object.entries(sv.bots || {}).filter(([, up]) => !up).map(([k]) => k);
-  if (down.length) add("bad", "Bot down: " + down.join(", "), "", "health");
+  if (!S) {             // the PC's view of the server - replaced by the server's own report while it's in use
+    if (sv.alive === false) add("bad", "Server isn't checking in", "Last heartbeat " + ago(sv.heartbeat_age_min), "health");
+    const down = Object.entries(sv.bots || {}).filter(([, up]) => !up).map(([k]) => k);
+    if (down.length) add("bad", "Bot down: " + down.join(", "), "", "health");
+  }
   const al = healthAlerts().shown, fails = al.filter(x => x.severity === "FAIL");
   if (fails.length) add("bad", fails.length + " red alert" + (fails.length > 1 ? "s" : "") + " on the PC", fails.slice(0, 2).map(x => x.title).join(" · ") + (fx().enabled ? " · tap to have Claude fix it" : ""), "health");
 
@@ -332,6 +360,31 @@ const row = (l, r, sub, cls) => `<div class="row"><div class="l">${esc(l)}${sub 
 const sec = t => `<div class="sec">${esc(t)}</div>`;
 const payRow = (l, r, sub, cls, key) => `<div class="row"><div class="l">${esc(l)}${sub ? `<small>${esc(sub)}</small>` : ""}</div><div class="r ${cls || ""}">${esc(r)}${key ? `<br><button class="pay" data-paid="${esc(key)}">Paid ✓</button>` : ""}</div></div>`;
 
+// v13: the server's own report, as a Health section ("" when the server has never sent one).
+function serverReport(on) {
+  const S = sv13();
+  if (!S.generated_at) return "";
+  const w = obj(S.watcher), r = obj(S.runner), p = obj(S.pc), sa = obj(S.server_app), d = obj(S.drive), al = svAlerts(S);
+  const okc = (good, bad) => good ? "pos" : bad ? "neg" : "";
+  // Ages in the report were measured when the server built it: add how old the report is now.
+  const agoS = m => m == null || isNaN(Number(m)) ? ago(null) : ago(Number(m) + (svAge() || 0));
+  let h = sec(on ? "🖥️ PC off - the server's own report" : "Server's own report · as of " + ago(svAge()) + (S.reason === "startup check" ? " (a check at its last restart)" : " (sent while the PC was off)"));
+  h += row("Server report", ago(svAge()), on ? "live from " + (S.host || "the server") + " · every " + (S.every_min || 5) + " min" : "it sends one only while it sees the PC off (and once at each restart)", on ? "pos" : "");
+  h += row("Bot watcher", w.alive ? "up" : "not checking in", "heartbeat " + agoS(w.heartbeat_age_min) + (w.restart_pending ? " · restart pending" : ""), okc(w.alive, !w.alive));
+  Object.entries(obj(S.bots)).forEach(([k, up]) => { h += row(k, up ? "up" : "DOWN", w.alive ? "" : "as of the watcher's last heartbeat", up ? "pos" : "neg"); });
+  h += row("Ops runner", r.owner === "server" ? "running it" : r.owner === "pc" ? "standing by" : "?", (r.text || "") + " · last cycle " + agoS(r.cycle_age_min) + (r.error_count ? " · " + r.error_count + " error" + (r.error_count > 1 ? "s" : "") : "") + (arr(r.ran).length ? " · ran " + arr(r.ran).join(", ") : ""), r.error_count ? "old" : "");
+  arr(r.errors).forEach(e => { h += row("Runner error", "", e, "neg"); });
+  h += row("PC, as the server sees it", p.closed_for_server ? "closed" : p.readable === false ? "can't read" : "heartbeat " + agoS(p.heartbeat_age_min), p.closed_for_server ? "you closed it for the server" + (p.offline_at ? " " + when(p.offline_at) : "") : "");
+  if (sa.heartbeat_age_min != null) h += row("Server app (standby)", sa.acting ? "acting" : "holding", "heartbeat " + agoS(sa.heartbeat_age_min));
+  h += row("Google Drive on the server", d.control_ok ? "mounted" : "NOT mounted", "watchdog checked " + agoS(d.watchdog_age_min), okc(d.control_ok, d.control_ok === false));
+  if (S.bots_data_age_min != null) h += row("Bots' data", agoS(S.bots_data_age_min), "how old the snapshot the bots answer from is");
+  const c = obj(S.checks);
+  h += sec("Server alerts · " + (S.alerts_total != null ? S.alerts_total : al.length) + (c.ok != null ? " · " + c.ok + " checks OK" : ""));
+  h += al.length ? al.map(x => row(x.title, x.severity, x.detail, x.severity === "FAIL" ? "neg" : "old")).join("") : `<p class="note">No red or yellow alerts on the server.</p>`;
+  if (S.alerts_total > al.length) h += `<p class="note">+${esc(S.alerts_total - al.length)} more on the server.</p>`;
+  return h;
+}
+
 const SHEETS = {
   bets: ["🎯 Bets", () => {
     const b = mh().bets || {}, p = b.last_published || {};
@@ -349,11 +402,13 @@ const SHEETS = {
   }],
   health: ["🩺 Health", () => {
     const hh = mh().health || {}, pc = hh.pc || {}, sv = hh.server || {}, oc = hh.odds_credits || {};
-    let h = sec("PC");
+    const on = serverOn(), srv = serverReport(on);
+    let h = on ? srv : "";
+    h += sec(pcStale() && mh().generated_at ? "PC (its last report, " + ago(ageMin(mh().generated_at)) + ")" : "PC");
     h += row("MasterHub app", pc.active ? "running" : "not running", "heartbeat " + ago(pc.heartbeat_age_min), pc.active ? "pos" : "neg");
     h += row("Snapshot", ago(ageMin(mh().generated_at)), "MasterHub half");
     h += row("Snapshot", ago(ageMin(dk().generated_at)), "Marvel Desktop half");
-    h += sec("Server");
+    h += sec(pcStale() ? "Server (as the PC last saw it)" : "Server");
     h += row("Server", sv.alive ? "up" : "not checking in", "heartbeat " + ago(sv.heartbeat_age_min), sv.alive ? "pos" : "neg");
     Object.entries(sv.bots || {}).forEach(([k, up]) => { h += row(k, up ? "up" : "DOWN", "", up ? "pos" : "neg"); });
     h += row("Ops runner", ago(sv.ops_runner_age_min), "owner: " + (sv.ops_owner || "?") + (sv.ops_errors ? " · " + sv.ops_errors + " errors" : ""));
@@ -373,6 +428,7 @@ const SHEETS = {
     Object.entries(hh.runners_age_min || {}).forEach(([k, v]) => { h += row(k.replace(/_/g, " "), ago(v)); });
     h += sec("Odds API credits");
     ["primary", "backup", "key3", "key4"].forEach(k => { if (oc[k + "_credits"] != null) h += row(k + (oc.active_key === k ? " (active)" : ""), Number(oc[k + "_credits"]).toLocaleString()); });
+    if (!on) h += srv;
     return h;
   }],
   money: ["💵 Money", () => {
