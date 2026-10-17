@@ -177,17 +177,20 @@ function tapFor(q) {
 const apWaiting = () => apOpen().filter(q => !tapFor(q));
 const when = iso => iso ? new Date(iso).toLocaleDateString("en-US", { timeZone: TZ, month: "short", day: "numeric" }) + " " + t12(iso) : "";
 
+// Yes / No sit on their own line as two big fixed-size buttons: arming changes the LABEL only,
+// never the size or place, so the second tap lands where the first did (a growing button made
+// the row re-wrap and the confirm tap miss - found in the 10/17 click test).
 function apCard(q, can) {
   const t = tapFor(q), l = tapsMap()[tapKey(q)];
-  let right;
-  if (t) right = `<b class="${t.answer === "yes" ? "pos" : "neg"}">${esc(t.answer.toUpperCase())}</b><small>sent ${esc(t12(t.at))} · the PC picks it up within 5 min</small>`;
-  else if (!can) right = `<small>this phone can't answer</small>`;
+  let act;
+  if (t) act = `<div class="ap-sent"><b class="${t.answer === "yes" ? "pos" : "neg"}">${esc(t.answer.toUpperCase())}</b> sent ${esc(t12(t.at))} · the PC picks it up within 5 min</div>`;
+  else if (!can) act = `<div class="ap-sent">This phone can't answer.</div>`;
   else {
     const armed = a => ARMED && ARMED.k === tapKey(q) && ARMED.answer === a;
     const btn = a => `<button class="pay${a === "no" ? " undo" : ""}${armed(a) ? " armed" : ""}" data-ap="${esc(q.id)}" data-ans="${a}"${SENDING ? " disabled" : ""}>${armed(a) ? "Tap again: " + a.toUpperCase() : a === "yes" ? "Yes" : "No"}</button>`;
-    right = btn("yes") + " " + btn("no") + (l && l.state === "error" ? `<small class="neg">${esc(l.err)}</small>` : "");
+    act = `<div class="ap-btns">${btn("yes")}${btn("no")}</div>` + (l && l.state === "error" ? `<small class="neg">${esc(l.err)}</small>` : "");
   }
-  return `<div class="row"><div class="l">${esc(q.id)} · ${esc(q.ask)}<small>Claude: ${esc(q.rec)}${q.why ? " · " + esc(q.why) : ""}</small></div><div class="r">${right}</div></div>`;
+  return `<div class="ap-q"><div>${esc(q.id)} · ${esc(q.ask)}</div><small>Claude: ${esc(q.rec)}${q.why ? " · " + esc(q.why) : ""}</small>${q.does ? `<small>${esc(q.does)}</small>` : ""}${act}</div>`;
 }
 
 // Two taps: the first arms the button, the second (within CONFIRM_MS) sends. Only the id,
@@ -508,8 +511,12 @@ const SHEETS = {
     if (a.open_total > open.length) h += `<p class="note">+${a.open_total - open.length} more waiting - they show here as these are answered.</p>`;
     const rc = a.received || [];
     h += sec("Received by the PC");
+    // Step 2: what the PC did with it (done / needs you at the PC / declined / failed).
+    const RES = { done: "✅ done", needs_pc: "🖥️ needs you at the PC", declined: "nothing done", failed: "❌ failed" };
     h += rc.length ? rc.map(d => row(d.id + (d.ask ? " · " + d.ask : ""), String(d.answer || "").toUpperCase() + (d.status === "accepted" ? " ✓" : ""),
-      (d.status === "accepted" ? "received " : "not used - " + d.why + " · ") + when(d.received_at), d.status === "accepted" ? "pos" : "neg")).join("")
+      (d.status === "accepted" ? "received " : "not used - " + d.why + " · ") + when(d.received_at) +
+        (d.result ? " · " + (RES[d.result] || d.result) + (d.result_detail ? ": " + d.result_detail : "") : ""),
+      d.status !== "accepted" || d.result === "failed" ? "neg" : "pos")).join("")
       : `<p class="note">Nothing received yet.</p>`;
     return h;
   }],

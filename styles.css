@@ -80,3 +80,9 @@ main { padding: 12px 16px calc(env(safe-area-inset-bottom) + 16px); max-width: 6
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 4px; }
 .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; font-size: 13px; cursor: pointer; }
 .chip.on { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700; }
+/* v11 Approvals: question + two big fixed-size Yes / No buttons on their own line */
+.ap-q { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.ap-q small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.ap-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+.ap-btns .pay { margin: 0; padding: 11px 6px; font-size: 15px; white-space: nowrap; }
+.ap-sent { margin-top: 6px; font-size: 13px; }
