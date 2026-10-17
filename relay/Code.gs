@@ -31,6 +31,8 @@
  *   {task:"get",    pass}                                    phone (+ last 30 taps)
  *   {task:"ping",   pass}                                    phone / setup check
  *   {task:"decide", dpass, id:"A-017", answer:"yes"|"no", sig, tapped_at}   phone
+ *   {task:"decide", dpass, id:"F-004", answer:"yes", sig, tapped_at}   phone "Fix it" (Step 3):
+ *        only an F- id the PC's newest snapshot lists under repairs.fixable, with its sig
  * Storage: each part as compact JSON split into <=8,000-char chunks
  * (Script Properties cap one value at ~9 KB), plus the time it arrived.
  * Only the newest copy of each part is kept. Taps: one property each (dec_<seq>), the
@@ -131,13 +133,15 @@ function decide(P, cfg, req) {
   if (same(cfg.decide, cfg.read) || same(cfg.decide, cfg.write)) return { error: "decide must be its own secret - fix SCOTT_HUB" };
   if (!same(req.dpass, cfg.decide)) return { error: "wrong decide pass" };
   const id = String(req.id || ""), answer = String(req.answer || "").toLowerCase(), sig = String(req.sig || "");
-  if (!/^A-\d{3,5}$/.test(id)) return { error: "bad id" };
-  if (answer !== "yes" && answer !== "no") return { error: "answer must be yes or no" };
+  if (!/^[AF]-\d{3,5}$/.test(id)) return { error: "bad id" };
+  // A- = Claude's Yes / No question; F- = "Fix it" on an open fail (Step 3) - a request, yes only.
+  const fix = id.charAt(0) === "F";
+  if (fix ? answer !== "yes" : (answer !== "yes" && answer !== "no")) return { error: fix ? "a fix request is yes only" : "answer must be yes or no" };
   const mh = getPart(P, "masterhub");
-  const ap = mh && mh.data && mh.data.approvals;
-  if (!ap || !ap.enabled) return { error: "approvals are switched off on the PC" };
-  const q = (ap.open || []).filter(function (x) { return x && x.id === id; })[0];
-  if (!q) return { error: id + " isn't an open question (already answered or withdrawn)" };
+  const blk = mh && mh.data && (fix ? mh.data.repairs : mh.data.approvals);
+  if (!blk || !blk.enabled) return { error: (fix ? "Fix-it is" : "approvals are") + " switched off on the PC" };
+  const q = ((fix ? blk.fixable : blk.open) || []).filter(function (x) { return x && x.id === id; })[0];
+  if (!q) return { error: id + (fix ? " isn't an open fail any more" : " isn't an open question (already answered or withdrawn)") };
   if (q.sig !== sig) return { error: id + " changed since your phone loaded it - refresh and look again" };
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);

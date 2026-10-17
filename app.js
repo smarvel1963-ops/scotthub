@@ -12,6 +12,9 @@
  * the decide pass, from its own one-time link (#d=...) - the read pass can't decide. A tap
  * sends only the id, yes|no and the question's sig; two taps to confirm, and the first answer
  * stands. The PC (C:/MasterHub/scott_approvals.py) shows "received" back in its snapshot.
+ * v12 FIX IT (Scott 10/17): each open fail on Health has a two-tap "Fix it" (sends the F- id + sig
+ * only). Claude builds the fix switched OFF and offers it back as an A- question; its status
+ * (requested / working / fix ready / needs you at the PC / cleared) comes from scott_repairs.py.
  */
 "use strict";
 
@@ -196,16 +199,16 @@ function apCard(q, can) {
 // Two taps: the first arms the button, the second (within CONFIRM_MS) sends. Only the id,
 // yes|no and the sig leave the phone - never typed text.
 async function sendTap(id, answer) {
-  const q = apOpen().filter(x => x.id === id)[0];
+  const q = apOpen().concat(fxList()).filter(x => x.id === id)[0];      // A- question or F- fail (Fix it)
   if (!q || SENDING) return;
-  const k = tapKey(q);
+  const k = tapKey(q), here = () => $("#sheet").dataset.key || "approvals";
   if (!ARMED || ARMED.k !== k || ARMED.answer !== answer || Date.now() - ARMED.at > CONFIRM_MS) {
-    const mine = ARMED = { k, answer, at: Date.now() };
-    openSheet("approvals");
-    setTimeout(() => { if (ARMED === mine) { ARMED = null; if ($("#sheet").dataset.key === "approvals") openSheet("approvals"); } }, CONFIRM_MS);
+    const mine = ARMED = { k, answer, at: Date.now() }, sheet = here();
+    openSheet(sheet);
+    setTimeout(() => { if (ARMED === mine) { ARMED = null; if (here() === sheet) openSheet(sheet); } }, CONFIRM_MS);
     return;
   }
-  ARMED = null; SENDING = true; openSheet("approvals");
+  ARMED = null; SENDING = true; openSheet(here());
   try {
     const r = await fetch(RELAY, { method: "POST", body: JSON.stringify({ task: "decide", dpass: store.get(K_DEC), id: q.id, answer, sig: q.sig, tapped_at: new Date().toISOString() }) });
     const j = await r.json();
@@ -219,6 +222,33 @@ async function sendTap(id, answer) {
   await load();
 }
 
+// ── Fix it (v12, Step 3): every open fail can be handed to Claude ──
+// A tap sends only the F- id + its sig. Claude diagnoses and builds the fix switched OFF; it comes
+// back as a Yes / No in Approvals, and nothing turns on without that Yes.
+const fx = () => mh().repairs || {};
+const fxList = () => fx().fixable || [];
+const FX_STATUS = {
+  requested: f => "🔧 Fix requested " + (f.at ? t12(f.at) : "") + " · Claude picks it up when the repairs routine runs",
+  working: () => "🛠️ Claude is working on it",
+  fix_ready: f => "✅ Fix ready - answer " + (f.offer || "it") + " in Approvals (nothing is on until your Yes)",
+  needs_pc: f => "🖥️ Needs you at the PC" + (f.note ? ": " + f.note : ""),
+  cleared: () => "✅ cleared",
+};
+function fixCard(f, can) {
+  const t = tapFor(f);
+  let act;
+  if (f.status && f.status !== "open") act = `<div class="ap-sent">${esc((FX_STATUS[f.status] || (s => s.status))(f))}</div>`;
+  else if (t) act = `<div class="ap-sent">🔧 Fix request sent ${esc(t12(t.at))} · the PC picks it up within 5 min</div>`;
+  else if (!can) act = `<div class="ap-sent">This phone can't send fix requests.</div>`;
+  else {
+    const armed = ARMED && ARMED.k === tapKey(f);
+    act = `<div class="ap-btns"><button class="pay${armed ? " armed" : ""}" data-ap="${esc(f.id)}" data-ans="yes"${SENDING ? " disabled" : ""}>${armed ? "Tap again: FIX IT" : "🔧 Fix it"}</button></div>`;
+    const l = tapsMap()[tapKey(f)];
+    if (l && l.state === "error") act += `<small class="neg">${esc(l.err)}</small>`;
+  }
+  return `<div class="ap-q"><div class="${f.severity === "FAIL" ? "neg" : "old"}">${esc(f.id)} · ${esc(f.title)}</div>${f.detail ? `<small>${esc(f.detail)}</small>` : ""}${act}</div>`;
+}
+
 // ── middle: what needs you ────────────────────────────────────
 function needs() {
   const out = [], m = mh(), d = dk(), h = m.health || {}, b = m.bets || {}, mo = d.money || {};
@@ -228,13 +258,15 @@ function needs() {
   if (a != null && a > STALE_MIN) add(a > 60 ? "bad" : "warn", "PC hasn't reported since " + t12(m.generated_at), "Numbers below are from then. PC off, asleep, or the upload stopped.", "health");
   const qs = ap().enabled ? apWaiting() : [];
   if (qs.length) add("warn", "🗳️ " + qs.length + " question" + (qs.length > 1 ? "s" : "") + " from Claude", qs.slice(0, 2).map(q => q.id + " " + q.ask).join(" · "), "approvals");
+  const ready = fx().enabled ? fxList().filter(f => f.status === "fix_ready") : [];
+  if (ready.length) add("good", "✅ " + ready.length + " fix" + (ready.length > 1 ? "es" : "") + " ready for your Yes", ready.slice(0, 2).map(f => f.title).join(" · "), "approvals");
   if (h.pc && h.pc.active === false) add("warn", h.pc.handed_to_server ? "PC handed the operation to the server" : "MasterHub app isn't running on the PC", "Last PC heartbeat " + ago(h.pc.heartbeat_age_min), "health");
   const sv = h.server || {};
   if (sv.alive === false) add("bad", "Server isn't checking in", "Last heartbeat " + ago(sv.heartbeat_age_min), "health");
   const down = Object.entries(sv.bots || {}).filter(([, up]) => !up).map(([k]) => k);
   if (down.length) add("bad", "Bot down: " + down.join(", "), "", "health");
   const al = healthAlerts().shown, fails = al.filter(x => x.severity === "FAIL");
-  if (fails.length) add("bad", fails.length + " red alert" + (fails.length > 1 ? "s" : "") + " on the PC", fails.slice(0, 2).map(x => x.title).join(" · "), "health");
+  if (fails.length) add("bad", fails.length + " red alert" + (fails.length > 1 ? "s" : "") + " on the PC", fails.slice(0, 2).map(x => x.title).join(" · ") + (fx().enabled ? " · tap to have Claude fix it" : ""), "health");
 
   const nowA = alertsOpen(mo).filter(x => x.severity === "NOW");
   if (nowA.length) add("bad", nowA.length + " money alert" + (nowA.length > 1 ? "s" : "") + " need you now", nowA.slice(0, 2).map(x => x.title.split("  -  ")[0]).join(" · "), "money");
@@ -325,6 +357,14 @@ const SHEETS = {
     h += row("Server", sv.alive ? "up" : "not checking in", "heartbeat " + ago(sv.heartbeat_age_min), sv.alive ? "pos" : "neg");
     Object.entries(sv.bots || {}).forEach(([k, up]) => { h += row(k, up ? "up" : "DOWN", "", up ? "pos" : "neg"); });
     h += row("Ops runner", ago(sv.ops_runner_age_min), "owner: " + (sv.ops_owner || "?") + (sv.ops_errors ? " · " + sv.ops_errors + " errors" : ""));
+    if (fx().enabled) {
+      const fl = fxList(), can = !!store.get(K_DEC);
+      h += sec("🔧 Fix it · " + fl.length + " open");
+      h += fl.length ? fl.map(f => fixCard(f, can)).join("") : `<p class="note">Nothing failing right now.</p>`;
+      if (fx().fixable_total > fl.length) h += `<p class="note">+${fx().fixable_total - fl.length} more open.</p>`;
+      (fx().recent || []).slice(0, 5).forEach(f => { h += row(f.id + " · " + f.title, "✅ cleared", f.at ? when(f.at) : ""); });
+      h += `<p class="note">Fix it = Claude diagnoses it and builds the fix switched OFF; it comes back as a Yes / No in Approvals. A server fix comes back "needs you at the PC" (it needs a deploy).</p>`;
+    }
     const { shown, hidden } = healthAlerts();
     h += sec("Alerts (checked " + (hh.alerts_checked_at ? t12(hh.alerts_checked_at) : "?") + ")");
     h += shown.length ? shown.map(a => row(a.title, a.severity, a.detail, a.severity === "FAIL" ? "neg" : "")).join("") : `<p class="note">No red or yellow alerts.</p>`;
