@@ -19,6 +19,11 @@
  * part, "server", sent by the server itself (C:/MasterHub/scott_hub_server.py) every 5 min while the PC
  * is off - heartbeat, bots, ops runner, its alerts; never bets or money. When the PC's part is stale and
  * the server's is fresh, the top line reads "PC off - server report" and Health leads with it.
+ * v14 USEMART SUPPORT (Scott 10/23: "It should come up in my scott hub so can respond from there fast"): a fourth part,
+ * "usemart", sent every 5 min by the UseMart server (usemart api/src/scotthub.ts, switch SCOTT_HUB_SUPPORT) - support items
+ * waiting on Scott, how many are past his 24-hour target, the newest 10 (ref, first name, topic, age). A UseMart card in
+ * "What needs you" (red when any is over 24 h) and a UseMart sheet with a Reply button per item. The Reply link is BUILT
+ * HERE from the item's id (checked to be a plain id) - never a link taken from the data.
  */
 "use strict";
 
@@ -28,6 +33,8 @@ const K_DEC = "scotthub.d", K_TAPS = "scotthub.taps";
 const CONFIRM_MS = 6000;       // second tap must come within 6 s
 const STALE_MIN = 15;          // PC writes every 5 min; 3 misses = say so
 const SERVER_STALE_MIN = 15;   // the server writes every 5 min while the PC is off
+const UM_STALE_MIN = 20;       // v14: UseMart writes every 5 min while its switch is on
+const UM_REPLY = "https://usemart.net/#admin-support/";
 const REFRESH_MS = 120000;
 const TZ = "America/Chicago";
 // ops_sentinel reads data\server_ops_status.json, but the real file is in the Drive
@@ -99,6 +106,12 @@ const svAge = () => ageMin((DATA && DATA.server && DATA.server.received_at) || s
 const pcStale = () => { const a = ageMin(mh().generated_at); return a == null || a > STALE_MIN; };
 // "PC off - server report": the PC's part is stale and the server's is fresh.
 const serverOn = () => { const a = svAge(); return pcStale() && a != null && a <= SERVER_STALE_MIN; };
+
+// v14: UseMart support. Words shown escaped; ids must be plain uuids before a Reply link is built from them.
+const um = () => obj(DATA && DATA.usemart && DATA.usemart.data);
+const umAge = () => ageMin(DATA && DATA.usemart && DATA.usemart.received_at);
+const umItems = () => arr(um().newest).filter(x => x && typeof x === "object" && /^[0-9a-f-]{36}$/i.test(String(x.id || "")));
+const umHave = () => !!(DATA && DATA.usemart && DATA.usemart.data);
 
 function healthAlerts() {
   const h = mh().health || {};
@@ -281,6 +294,12 @@ function needs() {
     if (sf.length) add("bad", sf.length + " red alert" + (sf.length > 1 ? "s" : "") + " on the server", sf.slice(0, 2).map(x => x.title).join(" · "), "health");
     else add(obj(S.runner).running_operation === true && !sw ? "good" : "warn", "Server up · " + bots.filter(([, up]) => up === true).length + "/" + bots.length + " bots running",
              (obj(S.runner).text || "") + (sw ? " · " + sw + " yellow alert" + (sw > 1 ? "s" : "") + " under Health" : ""), "health");
+  }
+  if (umHave()) {           // v14: UseMart support waiting on Scott
+    const U = um(), n = Number(U.waiting) || 0, late = Number(U.over_24h) || 0, age = umAge();
+    if (age != null && age > UM_STALE_MIN) add("warn", "UseMart support card is stale - last update " + ago(age), "The UseMart server sends it every 5 min while the switch is on.", "usemart");
+    else if (n) add(late ? "bad" : "warn", "🛒 " + n + " UseMart support item" + (n > 1 ? "s" : "") + " waiting on you" + (late ? " · " + late + " over 24 h" : ""),
+                    umItems().slice(0, 2).map(x => x.name + ": " + x.topic).join(" · ") + " · tap to reply", "usemart");
   }
   const qs = ap().enabled ? apWaiting() : [];
   if (qs.length) add("warn", "🗳️ " + qs.length + " question" + (qs.length > 1 ? "s" : "") + " from Claude", qs.slice(0, 2).map(q => q.id + " " + q.ask).join(" · "), "approvals");
@@ -616,6 +635,15 @@ const SHEETS = {
       : `<p class="note">Nothing received yet.</p>`;
     return h;
   }],
+  usemart: ["🛒 UseMart support", () => {
+    const U = um(), items = umItems();
+    let h = `<p class="note">Waiting on you: <b>${esc(Number(U.waiting) || 0)}</b>${Number(U.over_24h) ? ` · <span class="neg">${esc(U.over_24h)} over 24 h</span>` : ""} · updated ${esc(ago(umAge()))}. The page promises a reply within 2 business days; your target is 24 hours.</p>`;
+    h += items.length ? items.map(x => `<div class="row"><div class="l">${esc(x.name)} · ${esc(x.topic)}<small>ref ${esc(x.ref)} · waiting ${esc(ago(Number(x.age_min)))}${x.over_24h ? " · over 24 h" : ""}</small></div>` +
+      `<div class="r ${x.over_24h ? "neg" : ""}"><a class="umreply" href="${UM_REPLY + encodeURIComponent(String(x.id).toLowerCase())}" target="_blank" rel="noopener">Reply ↗</a></div></div>`).join("")
+      : `<p class="note">Nothing waiting. 👍</p>`;
+    h += `<p class="note">Reply opens the item in UseMart → Account → Owner controls → Support & reports (sign in as an admin on this phone once).</p>`;
+    return h;
+  }],
   todo: ["✅ To-do", () => {
     const hl = mh().hot_list || {}, le = (dk().business || {}).loose_ends || {};
     let h = sec("HOT LIST · " + (hl.open_total ?? "?") + " open");
@@ -638,6 +666,7 @@ function render() {
   paintFresh();
   if (!DATA) { $("#needs").innerHTML = `<li class="bad">Can't load yet${LAST_ERR ? `<small>${esc(LAST_ERR)}</small>` : ""}</li>`; return; }
   $("#apBubble").classList.toggle("hidden", !ap().enabled);
+  $("#umBubble").classList.toggle("hidden", !umHave());
   renderNeeds();
   renderGlance();
   const open = $("#sheet:not(.hidden)") && $("#sheet").dataset.key;
