@@ -24,6 +24,11 @@
  * waiting on Scott, how many are past his 24-hour target, the newest 10 (ref, first name, topic, age). A UseMart card in
  * "What needs you" (red when any is over 24 h) and a UseMart sheet with a Reply button per item. The Reply link is BUILT
  * HERE from the item's id (checked to be a plain id) - never a link taken from the data.
+ * v15 FINANCE (Scott 10/25: "desktop program tying into scott hub phone app along with finance pages"; "every other week
+ * that get update"): the desktop part may carry "finance" - the bank reconcile Claude writes every other payday weekend
+ * (banks matched to the bank, till next payday, what's due before it, out of the hole, business costs), who owes Scott
+ * (MONEY SENT) and the "things to chase" list. Shown at the top of Money; the old statement balances move under it.
+ * "What needs you" says when he's short before payday and when the bills haven't been run in 16+ days.
  */
 "use strict";
 
@@ -112,6 +117,11 @@ const um = () => obj(DATA && DATA.usemart && DATA.usemart.data);
 const umAge = () => ageMin(DATA && DATA.usemart && DATA.usemart.received_at);
 const umItems = () => arr(um().newest).filter(x => x && typeof x === "object" && /^[0-9a-f-]{36}$/i.test(String(x.id || "")));
 const umHave = () => !!(DATA && DATA.usemart && DATA.usemart.data);
+
+// v15: finance from the desktop part (absent until the desktop switch FINANCE_ENABLED is on). Words shown escaped.
+const fin = () => obj(dk().finance);
+const finHave = () => !!fin().reconciled_day;
+const isYmd = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
 
 function healthAlerts() {
   const h = mh().health || {};
@@ -320,8 +330,15 @@ function needs() {
   const t = todayCT(), tm = addDays(t, 1);
   const soon = dueOpen(mo).filter(x => x.date === t || x.date === tm);
   if (soon.length) add("warn", soon.length + " bill" + (soon.length > 1 ? "s" : "") + " due today/tomorrow - " + money(soon.reduce((s, x) => s + Number(x.amount || 0), 0)), soon.map(x => x.name).slice(0, 3).join(" · "), "money");
-  const fn = mo.cash && mo.cash.first_negative;
-  if (fn && fn <= addDays(t, 7)) add("warn", "Cash forecast goes negative " + dayName(fn), "Balances are " + oldestBalance(mo) + " old - check before trusting it", "money");
+  if (finHave()) {          // v15: the bank reconcile replaces the statement-based forecast here
+    const F = fin(), tp = obj(F.till_payday), ds = Number(F.days_since_reconcile);
+    if (tp.total != null && Number(tp.total) < 0) add("bad", "Short " + money(-Number(tp.total)) + " before payday" + (isYmd(F.next_payday) ? " " + dayName(F.next_payday) : ""),
+                                                      arr(tp.accounts).map(a => a.name + " " + money(a.balance)).join(" · "), "money");
+    if (ds > 16) add("warn", "Bills not run since " + (isYmd(F.reconciled_day) ? dayName(F.reconciled_day) : "?"), "Payday weekend - tell Claude \"run bills\"", "money");
+  } else {
+    const fn = mo.cash && mo.cash.first_negative;
+    if (fn && fn <= addDays(t, 7)) add("warn", "Cash forecast goes negative " + dayName(fn), "Balances are " + oldestBalance(mo) + " old - check before trusting it", "money");
+  }
 
   const te = todayEvents(), timed = te.filter(e => !e.allDay);
   if (timed.length) {
@@ -404,6 +421,41 @@ function serverReport(on) {
   return h;
 }
 
+// v15: the Finance block at the top of Money.
+function financeBlock() {
+  const F = fin(), tp = obj(F.till_payday), me = obj(F.month_end), ow = obj(F.owed), bz = obj(F.business);
+  const ds = Number(F.days_since_reconcile), when = s => isYmd(s) ? dayName(s) : String(s || "");
+  let h = sec("🏦 Banks · matched to the bank " + when(F.reconciled_day) + (ds > 0 ? " · " + ds + " day" + (ds > 1 ? "s" : "") + " ago" : ""));
+  arr(F.banks).forEach(b => { h += row(b.name, money(b.balance), b.note || "", sign(b.balance)); });
+  if (F.banks_total != null) h += row("All three", money(F.banks_total), "", sign(F.banks_total));
+  if (tp.total != null) {
+    h += sec("⏳ Till payday " + when(F.next_payday) + " · " + money(tp.total));
+    arr(tp.accounts).forEach(a => { h += row(a.name, money(a.balance), "on " + when(tp.day), sign(a.balance)); });
+    const pin = arr(F.payday_in);
+    if (pin.length) h += row("Payday brings", money(pin.reduce((s, x) => s + Number(x.amount || 0), 0)), pin.map(x => x.name + " " + money(x.amount)).join(" · "), "pos");
+  }
+  const oh = arr(F.out_of_hole);
+  if (oh.length) h += sec("🧭 Out of the hole") + oh.map(t => `<p class="note">${esc(t)}</p>`).join("");
+  const bp = arr(F.before_payday).filter(x => x && typeof x === "object");
+  if (bp.length) h += sec("📋 Before payday · " + bp.length) + bp.map(x => row(x.item, money(x.amount), x.account + " · " + when(x.when), sign(x.amount))).join("");
+  if (me.total != null) {
+    h += sec("📅 Month end " + when(me.day) + " · " + money(me.total));
+    arr(me.accounts).forEach(a => { h += row(a.name, money(a.balance), "", sign(a.balance)); });
+  }
+  const ch = arr(F.chase).filter(c => c && typeof c === "object");
+  h += sec("🔎 Things to chase · " + ch.length) + (ch.length ? ch.map(c => row(c.title, "", c.detail)).join("") : `<p class="note">Nothing to chase.</p>`);
+  if (ow.error) h += sec("🤝 Who owes you") + `<p class="note">${esc(ow.error)}</p>`;
+  else if (ow.total != null) {
+    h += sec("🤝 Who owes you · " + money(ow.total));
+    arr(ow.people).filter(p => p && Number(p.owed) > 0).forEach(p => { h += row(p.name, money(p.owed), p.last ? "last " + when(p.last) : ""); });
+  }
+  if (bz.total != null) {
+    h += sec("🏢 Business (CMMG) " + when(bz.from) + " - " + when(bz.to) + " · " + money(bz.total));
+    arr(bz.items).forEach(i => { h += row(i.name, money(i.amount)); });
+  }
+  return h;
+}
+
 const SHEETS = {
   bets: ["🎯 Bets", () => {
     const b = mh().bets || {}, p = b.last_published || {};
@@ -452,7 +504,7 @@ const SHEETS = {
   }],
   money: ["💵 Money", () => {
     const mo = dk().money || {}, c = mo.cash || {};
-    let h = sec("Cash");
+    let h = finHave() ? financeBlock() + sec("From statements (older)") : sec("Cash");
     h += row("Starting balance", money(c.starting_balance), "built " + (c.built_at || "?"));
     (c.accounts || []).forEach(a => { h += row(a.name, money(a.balance), "as of " + a.as_of + (a.days_old > 7 ? " · " + a.days_old + " days old" : ""), a.days_old > 14 ? "old" : ""); });
     if (c.low_water != null) h += row("Lowest point ahead", money(c.low_water), c.low_water_date ? dayName(c.low_water_date) : "", sign(c.low_water));
