@@ -42,6 +42,11 @@ main { padding: 12px 16px calc(env(safe-area-inset-bottom) + 16px); max-width: 6
 .brief { margin: 2px 0 10px; padding: 9px 12px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line);
   font-size: 14px; line-height: 1.45; }
 .needs li.more { text-align: center; color: var(--muted); font-size: 14px; cursor: pointer; border-left-color: var(--line); }
+/* v17: Not now / Done / Bring back on each card; cards set aside look quieter */
+.cbtns { display: flex; gap: 8px; margin-top: 7px; }
+.cb { background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 12.5px; color: var(--muted); cursor: pointer; touch-action: manipulation; }
+.needs li.tucked { opacity: .72; }
+.needs li em { font-style: normal; color: var(--muted); font-size: 12.5px; }
 .glance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
 .tile .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }

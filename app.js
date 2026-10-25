@@ -29,6 +29,13 @@
  * (banks matched to the bank, till next payday, what's due before it, out of the hole, business costs), who owes Scott
  * (MONEY SENT) and the "things to chase" list. Shown at the top of Money; the old statement balances move under it.
  * "What needs you" says when he's short before payday and when the bills haven't been run in 16+ days.
+ * v16 TIDY (Scott 10/25: "tiddy up scott hub make it more useful"): the reconcile is the one money truth (due-now,
+ * till-payday tile; the desktop bill list is labeled "not your plan"); past-due cards fold into one card; the stale
+ * "cash goes negative" line is dropped while the reconcile is there; What needs you is sorted red-first, capped at 6
+ * with "+N more"; a one-line brief sits above it.
+ * v17 LEARNING ("self learning to benefit me the most"), kept on this phone: the bubbles reorder by what he opens;
+ * each card has Not now (12 h) / Done (until its words change); a card set aside 3+ times goes quiet by itself
+ * (never a red one); Money shows every bills run (is the gap shrinking?) and what was really spent vs the plan.
  */
 "use strict";
 
@@ -127,6 +134,47 @@ const isYmd = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
 const finSoon = (t, tm) => arr(fin().before_payday).filter(x => x && Number(x.amount) < 0 && !/^Everyday spending/i.test(String(x.item || ""))
   && (x.when === t || x.when === tm || x.when === "overdue" || x.when === "processing"));
 const CARD_RE = /card|concora|credit|over limit|past due/i;
+
+// ── v17 LEARNING (Scott 10/25: "make it more useful and self learning") - all on this phone, nothing sent ──
+// 1) Which screens he opens (last 30 days) -> the bubbles reorder to his most-used first (after 5+ opens).
+// 2) "Not now" (12 h) and "Done" (until the card's words change) on each card. A card set aside 3+ times
+//    goes quiet on its own - it moves under "+N more" - except red cards, which never hide themselves.
+//    Opening a card resets that, because opening it says it matters.
+const K_USE = "scotthub.use", K_HIDE = "scotthub.hide";
+const SNOOZE_MS = 12 * 3600000, QUIET_AFTER = 3, USE_DAYS = 30, LEARN_AFTER = 5;
+let LAST_CARDS = {};
+const loadJ = (k, d) => { try { return JSON.parse(store.get(k) || "null") || d; } catch (e) { return d; } };
+function recordUse(key) {
+  const u = loadJ(K_USE, {}), now = Date.now(), cut = now - USE_DAYS * 86400000;
+  u[key] = arr(u[key]).filter(t => t > cut).concat(now).slice(-60);
+  store.set(K_USE, JSON.stringify(u));
+}
+const useCount = (u, key) => arr(u[key]).filter(t => t > Date.now() - USE_DAYS * 86400000).length;
+function orderBubbles() {
+  const nav = document.querySelector(".bubbles");
+  if (!nav || !nav.querySelectorAll) return;
+  const u = loadJ(K_USE, {}), btns = Array.from(nav.querySelectorAll("button[data-open]"));
+  if (btns.reduce((s, b) => s + useCount(u, b.dataset.open), 0) < LEARN_AFTER) return;   // not enough to learn from yet
+  const refresh = nav.querySelector("button[data-act]");
+  btns.map((b, i) => ({ b, i, n: useCount(u, b.dataset.open) })).sort((a, z) => z.n - a.n || a.i - z.i).forEach(x => nav.appendChild(x.b));
+  if (refresh) nav.appendChild(refresh);
+}
+const cardKey = n => (n.open || "-") + "|" + String(n.text || "").replace(/[0-9$,.:+\-]+/g, "#");
+function cardState(n) {
+  const h = loadJ(K_HIDE, {})[cardKey(n)] || {};
+  if (h.done_text && h.done_text === n.text) return "done";
+  if (h.until && h.until > Date.now()) return "not now";
+  if ((h.snoozes || 0) >= QUIET_AFTER && n.cls !== "bad") return "quiet";
+  return "";
+}
+function hideCard(key, how) {
+  const all = loadJ(K_HIDE, {}), h = all[key] || {};
+  if (how === "snooze") { h.until = Date.now() + SNOOZE_MS; h.snoozes = (h.snoozes || 0) + 1; }
+  if (how === "done") h.done_text = LAST_CARDS[key];
+  if (how === "open" || how === "unhide") { h.snoozes = 0; delete h.until; delete h.done_text; }
+  if (how === "unhide" || !Object.keys(h).length || (how === "open" && !h.snoozes)) delete all[key]; else all[key] = h;
+  store.set(K_HIDE, JSON.stringify(all));
+}
 const cardName = x => String(x.title || "").split("  -  ")[0].replace(/\s*\.\.\.\d+\s*$/, "").replace(/\s*\|.*$/, "");
 
 function healthAlerts() {
@@ -396,11 +444,21 @@ const NEEDS_MAX = 6;
 let NEEDS_ALL = false;
 const needRank = c => c === "bad" ? 0 : c === "warn" ? 1 : c === "good" ? 2 : 3;
 function renderNeeds() {
-  const all = needs().map((n, i) => Object.assign({ i }, n)).sort((a, b) => needRank(a.cls) - needRank(b.cls) || a.i - b.i);
-  const show = NEEDS_ALL ? all : all.slice(0, NEEDS_MAX);
-  let h = show.map(n =>
-    `<li class="${n.cls}"${n.open ? ` data-open="${n.open}" role="button" tabindex="0"` : ""}>${esc(n.text)}${n.sub ? `<small>${esc(n.sub)}</small>` : ""}</li>`).join("");
-  if (all.length > NEEDS_MAX) h += `<li class="more" data-act="needs-more" role="button" tabindex="0">${NEEDS_ALL ? "Show less" : "+" + (all.length - NEEDS_MAX) + " more"}</li>`;
+  const all = needs().filter(n => !(n.cls === "good" && !n.open && /^All quiet/.test(n.text)))
+    .map((n, i) => Object.assign({ i, key: cardKey(n), st: cardState(n) }, n))
+    .sort((a, b) => needRank(a.cls) - needRank(b.cls) || a.i - b.i);
+  LAST_CARDS = {};
+  all.forEach(n => { LAST_CARDS[n.key] = n.text; });
+  const live = all.filter(n => !n.st), tucked = all.filter(n => n.st);
+  const btns = n => n.st ? `<span class="cbtns"><button class="cb" data-unhide="${esc(n.key)}">Bring back</button></span>`
+    : `<span class="cbtns"><button class="cb" data-snooze="${esc(n.key)}">Not now</button><button class="cb" data-done="${esc(n.key)}">Done</button></span>`;
+  const li = n => `<li class="${n.cls}${n.st ? " tucked" : ""}"${n.open ? ` data-open="${n.open}" data-key="${esc(n.key)}" role="button" tabindex="0"` : ""}>` +
+    `${esc(n.text)}${n.st ? ` <em>· ${n.st === "quiet" ? "quiet - set aside " + QUIET_AFTER + "+ times" : n.st}</em>` : ""}${n.sub ? `<small>${esc(n.sub)}</small>` : ""}${btns(n)}</li>`;
+  const top = live.slice(0, NEEDS_MAX), rest = live.slice(NEEDS_MAX).concat(tucked);
+  let h = top.map(li).join("");
+  if (!live.length) h += `<li class="good">All quiet. Nothing needs you right now.</li>`;
+  if (NEEDS_ALL) h += rest.map(li).join("");
+  if (rest.length) h += `<li class="more" data-act="needs-more" role="button" tabindex="0">${NEEDS_ALL ? "Show less" : "+" + rest.length + " more" + (tucked.length ? " (" + tucked.length + " set aside)" : "")}</li>`;
   $("#needs").innerHTML = h;
 }
 
@@ -486,6 +544,25 @@ function financeBlock() {
   if (me.total != null) {
     h += sec("📅 Month end " + when(me.day) + " · " + money(me.total));
     arr(me.accounts).forEach(a => { h += row(a.name, money(a.balance), "", sign(a.balance)); });
+  }
+  // v17: every bills run is kept - is the gap before payday shrinking? and what was really spent.
+  const hi = arr(F.history).filter(x => x && isYmd(x.day));
+  if (hi.length) {
+    h += sec("📈 Each bills run · is the gap shrinking?");
+    hi.forEach((x, i) => {
+      const p = hi[i - 1], d = p && x.till_payday_total != null && p.till_payday_total != null ? Number(x.till_payday_total) - Number(p.till_payday_total) : null;
+      h += row(when(x.day), money(x.till_payday_total), "till payday" + (d == null ? " · first run kept" : " · " + (d >= 0 ? "better by " : "worse by ") + money(Math.abs(d))), sign(x.till_payday_total));
+    });
+  }
+  const sp = obj(F.spending), sd = Number(sp.days) || 0;
+  if (sd > 0) {
+    const wk = v => money(Number(v || 0) / sd * 7) + "/wk";
+    h += sec("🧠 What you really spent · " + when(sp.from) + " - " + when(sp.to));
+    h += row("Everyday (cards)", wk(Number(sp.everyday || 0) + Number(sp.believe_card || 0)), "plan " + money(sp.plan_everyday_per_week) + "/wk" + (sp.everyday_items ? " · " + sp.everyday_items : ""));
+    h += row("Afterpay", wk(sp.afterpay), "installments that cleared");
+    h += row("Gas", wk(sp.gas), "");
+    h += `<p class="note">${hi.length >= 2 ? "Claude compares these at each bills run and suggests a better weekly number. Nothing changes without your yes."
+                                         : "One run so far. After the next bills run Claude can suggest a weekly number from what you really spend. Nothing changes without your yes."}</p>`;
   }
   const ch = arr(F.chase).filter(c => c && typeof c === "object");
   h += sec("🔎 Things to chase · " + ch.length) + (ch.length ? ch.map(c => row(c.title, "", c.detail)).join("") : `<p class="note">Nothing to chase.</p>`);
@@ -767,6 +844,7 @@ function render() {
   renderBrief();
   renderNeeds();
   renderGlance();
+  orderBubbles();
   const open = $("#sheet:not(.hidden)") && $("#sheet").dataset.key;
   if (open) openSheet(open);
 }
@@ -799,8 +877,19 @@ document.addEventListener("click", e => {
     renderNeeds(); renderGlance(); openSheet("money");
     return;
   }
+  const sz = e.target.closest("[data-snooze]"), dn = e.target.closest("[data-done]"), uh = e.target.closest("[data-unhide]");
+  if (sz || dn || uh) {     // v17: Not now / Done / Bring back - handled before the card's own tap
+    const how = sz ? "snooze" : dn ? "done" : "unhide";
+    hideCard((sz || dn || uh).dataset[sz ? "snooze" : dn ? "done" : "unhide"], how);
+    renderNeeds();
+    return;
+  }
   const o = e.target.closest("[data-open]");
-  if (o) { $("#sheet").dataset.key = o.dataset.open; openSheet(o.dataset.open); return; }
+  if (o) {
+    if (o.dataset.key) hideCard(o.dataset.key, "open");   // v17: opening a card says it matters
+    recordUse(o.dataset.open);
+    $("#sheet").dataset.key = o.dataset.open; openSheet(o.dataset.open); return;
+  }
   const a = e.target.closest("[data-act]");
   if (a && a.dataset.act === "close") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; }
   if (a && a.dataset.act === "refresh") { $("#fresh").textContent = "refreshing…"; load(); }
