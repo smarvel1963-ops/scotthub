@@ -122,6 +122,12 @@ const umHave = () => !!(DATA && DATA.usemart && DATA.usemart.data);
 const fin = () => obj(dk().finance);
 const finHave = () => !!fin().reconciled_day;
 const isYmd = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+// v16: what's due now (overdue / processing) or by tomorrow, from the reconcile. The weekly everyday-spending
+// line is a budget, not a bill, so it never shows as "due".
+const finSoon = (t, tm) => arr(fin().before_payday).filter(x => x && Number(x.amount) < 0 && !/^Everyday spending/i.test(String(x.item || ""))
+  && (x.when === t || x.when === tm || x.when === "overdue" || x.when === "processing"));
+const CARD_RE = /card|concora|credit|over limit|past due/i;
+const cardName = x => String(x.title || "").split("  -  ")[0].replace(/\s*\.\.\.\d+\s*$/, "").replace(/\s*\|.*$/, "");
 
 function healthAlerts() {
   const h = mh().health || {};
@@ -326,16 +332,25 @@ function needs() {
   if (fails.length) add("bad", fails.length + " red alert" + (fails.length > 1 ? "s" : "") + " on the PC", fails.slice(0, 2).map(x => x.title).join(" · ") + (fx().enabled ? " · tap to have Claude fix it" : ""), "health");
 
   const nowA = alertsOpen(mo).filter(x => x.severity === "NOW");
-  if (nowA.length) add("bad", nowA.length + " money alert" + (nowA.length > 1 ? "s" : "") + " need you now", nowA.slice(0, 2).map(x => x.title.split("  -  ")[0]).join(" · "), "money");
   const t = todayCT(), tm = addDays(t, 1);
-  const soon = dueOpen(mo).filter(x => x.date === t || x.date === tm);
-  if (soon.length) add("warn", soon.length + " bill" + (soon.length > 1 ? "s" : "") + " due today/tomorrow - " + money(soon.reduce((s, x) => s + Number(x.amount || 0), 0)), soon.map(x => x.name).slice(0, 3).join(" · "), "money");
-  if (finHave()) {          // v15: the bank reconcile replaces the statement-based forecast here
+  if (finHave()) {          // v15/v16: the bank reconcile is the ONE money truth here
     const F = fin(), tp = obj(F.till_payday), ds = Number(F.days_since_reconcile);
     if (tp.total != null && Number(tp.total) < 0) add("bad", "Short " + money(-Number(tp.total)) + " before payday" + (isYmd(F.next_payday) ? " " + dayName(F.next_payday) : ""),
                                                       arr(tp.accounts).map(a => a.name + " " + money(a.balance)).join(" · "), "money");
+    const soonF = finSoon(t, tm);
+    if (soonF.length) add("warn", soonF.length + " due now / tomorrow - " + money(-soonF.reduce((s, x) => s + Number(x.amount || 0), 0)),
+                          soonF.slice(0, 3).map(x => x.item.split(":")[0]).join(" · "), "money");
     if (ds > 16) add("warn", "Bills not run since " + (isYmd(F.reconciled_day) ? dayName(F.reconciled_day) : "?"), "Payday weekend - tell Claude \"run bills\"", "money");
+    // v16: the desktop's own money alerts, folded. Its "cash goes negative" works from statement balances weeks
+    // old, so the reconcile replaces it; past-due / over-limit cards become ONE card; anything else stays.
+    const cards = nowA.filter(x => CARD_RE.test(x.title)), staleCash = nowA.filter(x => /^Cash goes negative/i.test(x.title));
+    if (cards.length) add("bad", "💳 " + cards.length + " card" + (cards.length > 1 ? "s" : "") + " past due or over limit",
+                          cards.slice(0, 3).map(cardName).join(" · ") + " · check they're paid", "money");
+    nowA.filter(x => !cards.includes(x) && !staleCash.includes(x)).forEach(x => add("warn", x.title.split("  -  ")[0], "", "money"));
   } else {
+    if (nowA.length) add("bad", nowA.length + " money alert" + (nowA.length > 1 ? "s" : "") + " need you now", nowA.slice(0, 2).map(x => x.title.split("  -  ")[0]).join(" · "), "money");
+    const soon = dueOpen(mo).filter(x => x.date === t || x.date === tm);
+    if (soon.length) add("warn", soon.length + " bill" + (soon.length > 1 ? "s" : "") + " due today/tomorrow - " + money(soon.reduce((s, x) => s + Number(x.amount || 0), 0)), soon.map(x => x.name).slice(0, 3).join(" · "), "money");
     const fn = mo.cash && mo.cash.first_negative;
     if (fn && fn <= addDays(t, 7)) add("warn", "Cash forecast goes negative " + dayName(fn), "Balances are " + oldestBalance(mo) + " old - check before trusting it", "money");
   }
@@ -375,9 +390,18 @@ function oldestBalance(mo) {
   return ds.length ? Math.max(...ds) + " days" : "unknown";
 }
 
+// v16: most urgent first (red, yellow, green, the rest - same order inside each), only NEEDS_MAX shown,
+// "+N more" opens the rest.
+const NEEDS_MAX = 6;
+let NEEDS_ALL = false;
+const needRank = c => c === "bad" ? 0 : c === "warn" ? 1 : c === "good" ? 2 : 3;
 function renderNeeds() {
-  $("#needs").innerHTML = needs().map(n =>
+  const all = needs().map((n, i) => Object.assign({ i }, n)).sort((a, b) => needRank(a.cls) - needRank(b.cls) || a.i - b.i);
+  const show = NEEDS_ALL ? all : all.slice(0, NEEDS_MAX);
+  let h = show.map(n =>
     `<li class="${n.cls}"${n.open ? ` data-open="${n.open}" role="button" tabindex="0"` : ""}>${esc(n.text)}${n.sub ? `<small>${esc(n.sub)}</small>` : ""}</li>`).join("");
+  if (all.length > NEEDS_MAX) h += `<li class="more" data-act="needs-more" role="button" tabindex="0">${NEEDS_ALL ? "Show less" : "+" + (all.length - NEEDS_MAX) + " more"}</li>`;
+  $("#needs").innerHTML = h;
 }
 
 function renderGlance() {
@@ -387,8 +411,29 @@ function renderGlance() {
     tile("Today", td.record || "-", units(td.units) + (td.pending ? " · " + td.pending + " pending" : ""), sign(td.units)),
     tile("Last 7 days", wk.record || "-", units(wk.units) + (wk.win_pct != null ? " · " + wk.win_pct + "%" : ""), sign(wk.units)),
     tile("Top 5", t5.wins != null ? `${t5.wins}-${t5.losses}-${t5.pushes}` : "-", units(t5.units) + (t5.since ? " since " + dayName(t5.since) : ""), sign(t5.units)),
-    tile("Bills next 7 days", money(dueOpen(mo).reduce((s, x) => s + Number(x.amount || 0), 0)), dueOpen(mo).length + " still to pay", ""),
+    finHave() ? finTile(tile)   // v16: the reconcile's till-payday number replaces the desktop bill list
+              : tile("Bills next 7 days", money(dueOpen(mo).reduce((s, x) => s + Number(x.amount || 0), 0)), dueOpen(mo).length + " still to pay", ""),
   ].join("");
+}
+
+function finTile(tile) {
+  const F = fin(), tp = obj(F.till_payday), n = arr(F.chase).length;
+  return tile("Till payday", money(tp.total), (isYmd(F.next_payday) ? dayName(F.next_payday) : "") + (n ? " · " + n + " to chase" : ""), sign(tp.total));
+}
+
+// v16: one line under the clock - money, bets, next calendar item, things to chase.
+function renderBrief() {
+  const bits = [], F = fin(), td = (mh().bets || {}).today || {};
+  if (finHave()) {
+    const tp = obj(F.till_payday);
+    if (tp.total != null) bits.push((Number(tp.total) < 0 ? "💵 Short " + money(-Number(tp.total)) : "💵 OK " + money(tp.total)) + " till " + (isYmd(F.next_payday) ? dayName(F.next_payday) : "payday"));
+  }
+  if (td.record) bits.push("🎯 " + td.record + " " + units(td.units) + " today");
+  const nx = todayEvents().filter(e => !e.allDay && new Date(e.start).getTime() > Date.now())[0];
+  if (nx) bits.push("📅 " + t12(nx.start) + " " + nx.title);
+  if (finHave() && arr(F.chase).length) bits.push("🔎 " + arr(F.chase).length + " to chase");
+  const b = $("#brief");
+  if (b) { b.textContent = bits.join("  ·  "); b.classList.toggle("hidden", !bits.length); }
 }
 
 // ── sheets ────────────────────────────────────────────────────
@@ -510,7 +555,7 @@ const SHEETS = {
     if (c.low_water != null) h += row("Lowest point ahead", money(c.low_water), c.low_water_date ? dayName(c.low_water_date) : "", sign(c.low_water));
     if (c.first_negative) h += `<p class="note">The forecast goes negative ${esc(dayName(c.first_negative))}, but it starts from balances up to ${esc(oldestBalance(mo))} old.</p>`;
     const due = dueOpen(mo);
-    h += sec("Due in the next 7 days · " + money(due.reduce((s, x) => s + Number(x.amount || 0), 0)));
+    h += sec((finHave() ? "Desktop bill list (not your plan) · " : "Due in the next 7 days · ") + money(due.reduce((s, x) => s + Number(x.amount || 0), 0)));
     h += due.map(x => payRow(x.name, money(x.amount), dayName(x.date) + " · " + (x.kind === "CARD_DUE" ? "card payment" : x.kind.toLowerCase()) + (x.confirmed ? "" : " · not confirmed"), "", billKey(x))).join("") || `<p class="note">Nothing left to pay this week.</p>`;
     h += sec("Alerts");
     h += alertsOpen(mo).map(a => payRow(a.title, a.amount != null ? money(a.amount) : a.severity, a.severity + (a.when ? " · " + a.when : ""), a.severity === "NOW" ? "neg" : "", a.severity === "NOW" && a.amount > 0 ? alertKey(a) : null)).join("") || `<p class="note">No money alerts.</p>`;
@@ -719,6 +764,7 @@ function render() {
   if (!DATA) { $("#needs").innerHTML = `<li class="bad">Can't load yet${LAST_ERR ? `<small>${esc(LAST_ERR)}</small>` : ""}</li>`; return; }
   $("#apBubble").classList.toggle("hidden", !ap().enabled);
   $("#umBubble").classList.toggle("hidden", !umHave());
+  renderBrief();
   renderNeeds();
   renderGlance();
   const open = $("#sheet:not(.hidden)") && $("#sheet").dataset.key;
@@ -758,11 +804,12 @@ document.addEventListener("click", e => {
   const a = e.target.closest("[data-act]");
   if (a && a.dataset.act === "close") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; }
   if (a && a.dataset.act === "refresh") { $("#fresh").textContent = "refreshing…"; load(); }
+  if (a && a.dataset.act === "needs-more") { NEEDS_ALL = !NEEDS_ALL; renderNeeds(); }
   if (e.target.id === "sheet") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; }
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") $("#sheet").classList.add("hidden");
-  if (e.key === "Enter" && e.target.dataset && e.target.dataset.open) e.target.click();
+  if (e.key === "Enter" && e.target.dataset && (e.target.dataset.open || e.target.dataset.act)) e.target.click();
 });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
 
