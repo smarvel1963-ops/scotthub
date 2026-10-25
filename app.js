@@ -36,6 +36,10 @@
  * v17 LEARNING ("self learning to benefit me the most"), kept on this phone: the bubbles reorder by what he opens;
  * each card has Not now (12 h) / Done (until its words change); a card set aside 3+ times goes quiet by itself
  * (never a red one); Money shows every bills run (is the gap shrinking?) and what was really spent vs the plan.
+ * v18 LEARN SYNC (Scott 10/25 "8 yes"): those taps (Not now / Done / Bring back / open a card) and which screens he
+ * opens also go to the relay (task "learn", relay v6, the decide pass - this phone only sends when it holds one), so
+ * the PC (scott_hub_upload, switch "learn") keeps them for Claude to learn from. Queued here and resent until the
+ * relay takes them (an older relay says no - they wait). Each bills run's row also shows everyday spending per week.
  */
 "use strict";
 
@@ -95,6 +99,7 @@ async function load() {
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || "relay said no");
     DATA = j.parts; CAL = j.calendar || null; RELAY_TAPS = j.decisions || []; FETCHED_AT = new Date().toISOString(); LAST_ERR = null;
+    flushLearn();             // v18: anything queued while offline / before relay v6
     store.set(K_LAST, JSON.stringify({ parts: DATA, cal: CAL, taps: RELAY_TAPS, at: FETCHED_AT }));
   } catch (e) {
     LAST_ERR = String(e.message || e);
@@ -140,14 +145,40 @@ const CARD_RE = /card|concora|credit|over limit|past due/i;
 // 2) "Not now" (12 h) and "Done" (until the card's words change) on each card. A card set aside 3+ times
 //    goes quiet on its own - it moves under "+N more" - except red cards, which never hide themselves.
 //    Opening a card resets that, because opening it says it matters.
-const K_USE = "scotthub.use", K_HIDE = "scotthub.hide";
+const K_USE = "scotthub.use", K_HIDE = "scotthub.hide", K_LEARNQ = "scotthub.learnq";
 const SNOOZE_MS = 12 * 3600000, QUIET_AFTER = 3, USE_DAYS = 30, LEARN_AFTER = 5;
-let LAST_CARDS = {};
+let LAST_CARDS = {}, LEARN_SENDING = false;
 const loadJ = (k, d) => { try { return JSON.parse(store.get(k) || "null") || d; } catch (e) { return d; } };
 function recordUse(key) {
   const u = loadJ(K_USE, {}), now = Date.now(), cut = now - USE_DAYS * 86400000;
   u[key] = arr(u[key]).filter(t => t > cut).concat(now).slice(-60);
   store.set(K_USE, JSON.stringify(u));
+  learnEvent("view", { key: "sheet|" + key, open: key });
+}
+// v18: queue what he did, send it to the relay for the PC (decide pass only; resent until taken).
+const cutChars = (s, n) => Array.from(String(s || "")).slice(0, n).join("");   // whole characters, never half an emoji
+function learnEvent(how, c) {
+  const q = loadJ(K_LEARNQ, []);
+  q.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8), how, key: cutChars(c.key, 120),
+           text: cutChars(c.text, 120), cls: c.cls || "", open: c.open || "", at: new Date().toISOString() });
+  store.set(K_LEARNQ, JSON.stringify(q.slice(-200)));
+  flushLearn();
+}
+function flushLearn() {
+  const dp = store.get(K_DEC), q = loadJ(K_LEARNQ, []);
+  if (!dp || !q.length || LEARN_SENDING) return;
+  LEARN_SENDING = true;
+  const batch = q.slice(0, 20);
+  fetch(RELAY, { method: "POST", body: JSON.stringify({ task: "learn", dpass: dp, events: batch }) })
+    .then(r => r.json())
+    .then(j => {
+      if (!j || !j.ok) return;                       // an older relay says no - they wait
+      // remove exactly what the relay used up (by id), so a tap made while this was in flight is never lost
+      const gone = new Set(Array.isArray(j.ids) ? j.ids : batch.slice(0, typeof j.taken === "number" ? j.taken : batch.length).map(e => e.id));
+      store.set(K_LEARNQ, JSON.stringify(loadJ(K_LEARNQ, []).filter(e => !gone.has(e.id))));
+    })
+    .catch(() => {})
+    .then(() => { LEARN_SENDING = false; });
 }
 const useCount = (u, key) => arr(u[key]).filter(t => t > Date.now() - USE_DAYS * 86400000).length;
 function orderBubbles() {
@@ -168,9 +199,10 @@ function cardState(n) {
   return "";
 }
 function hideCard(key, how) {
-  const all = loadJ(K_HIDE, {}), h = all[key] || {};
+  const all = loadJ(K_HIDE, {}), h = all[key] || {}, card = LAST_CARDS[key] || {};
+  learnEvent(how, { key, text: card.text, cls: card.cls, open: card.open });
   if (how === "snooze") { h.until = Date.now() + SNOOZE_MS; h.snoozes = (h.snoozes || 0) + 1; }
-  if (how === "done") h.done_text = LAST_CARDS[key];
+  if (how === "done") h.done_text = card.text;
   if (how === "open" || how === "unhide") { h.snoozes = 0; delete h.until; delete h.done_text; }
   if (how === "unhide" || !Object.keys(h).length || (how === "open" && !h.snoozes)) delete all[key]; else all[key] = h;
   store.set(K_HIDE, JSON.stringify(all));
@@ -448,7 +480,7 @@ function renderNeeds() {
     .map((n, i) => Object.assign({ i, key: cardKey(n), st: cardState(n) }, n))
     .sort((a, b) => needRank(a.cls) - needRank(b.cls) || a.i - b.i);
   LAST_CARDS = {};
-  all.forEach(n => { LAST_CARDS[n.key] = n.text; });
+  all.forEach(n => { LAST_CARDS[n.key] = { text: n.text, cls: n.cls, open: n.open || "" }; });
   const live = all.filter(n => !n.st), tucked = all.filter(n => n.st);
   const btns = n => n.st ? `<span class="cbtns"><button class="cb" data-unhide="${esc(n.key)}">Bring back</button></span>`
     : `<span class="cbtns"><button class="cb" data-snooze="${esc(n.key)}">Not now</button><button class="cb" data-done="${esc(n.key)}">Done</button></span>`;
@@ -551,7 +583,8 @@ function financeBlock() {
     h += sec("📈 Each bills run · is the gap shrinking?");
     hi.forEach((x, i) => {
       const p = hi[i - 1], d = p && x.till_payday_total != null && p.till_payday_total != null ? Number(x.till_payday_total) - Number(p.till_payday_total) : null;
-      h += row(when(x.day), money(x.till_payday_total), "till payday" + (d == null ? " · first run kept" : " · " + (d >= 0 ? "better by " : "worse by ") + money(Math.abs(d))), sign(x.till_payday_total));
+      const ew = Number(x.spending_days) > 0 ? " · everyday " + money((Number(x.everyday || 0) + Number(x.believe_card || 0)) / Number(x.spending_days) * 7) + "/wk" : "";
+      h += row(when(x.day), money(x.till_payday_total), "till payday" + (d == null ? " · first run kept" : " · " + (d >= 0 ? "better by " : "worse by ") + money(Math.abs(d))) + ew, sign(x.till_payday_total));
     });
   }
   const sp = obj(F.spending), sd = Number(sp.days) || 0;

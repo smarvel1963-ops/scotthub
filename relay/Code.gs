@@ -51,6 +51,12 @@
  *   {task:"decide", dpass, id:"A-017", answer:"yes"|"no", sig, tapped_at}   phone
  *   {task:"decide", dpass, id:"F-004", answer:"yes", sig, tapped_at}   phone "Fix it" (Step 3):
  *        only an F- id the PC's newest snapshot lists under repairs.fixable, with its sig
+ *   {task:"learn",  dpass, events:[{id, key, how, text, cls, open, at}]}   phone (v6, Scott 10/25 "8 yes"):
+ *        what Scott does with the home cards (Not now / Done / Bring back / open) and which screens he
+ *        opens, so the PC can learn what matters to him. Same decide pass; <=20 events a call, each
+ *        field checked and cut to size (key / text 120 characters), one stored call <= LEARN_BYTES, all
+ *        stored calls <= LEARN_TOTAL characters (oldest dropped) and the newest LEARN_KEEP. Reply
+ *        {ok, stored, taken, ids}: ids = the phone ids used up, which the phone then removes. PC: "pull".
  * Storage: each part as compact JSON split into <=8,000-char chunks
  * (Script Properties cap one value at ~9 KB), plus the time it arrived.
  * Only the newest copy of each part is kept. Taps: one property each (dec_<seq>), the
@@ -63,6 +69,13 @@ const MAX_SERVER_PART = 20000;     // the server's report is ~3-6 KB
 const MAX_USEMART_PART = 20000;    // v5: UseMart's support card is ~1-3 KB
 const DEC_KEEP = 100;
 const DEC_SHOWN = 30;
+const LEARN_KEEP = 100;            // v6: stored "learn" calls (each <= LEARN_MAX events)
+const LEARN_MAX = 20;
+const LEARN_BYTES = 8000;          // one stored call, UTF-8 bytes (one Script Property holds ~9 KB)
+const LEARN_TOTAL = 60000;         // all stored learn calls together, characters (~180 KB worst case in bytes) - the 500 KB store is shared with the parts + taps
+const LEARN_TEXT = 120;            // key / text cut to this many characters (whole characters, never half an emoji)
+const LEARN_HOWS = ["snooze", "done", "unhide", "open", "view"];
+function cutChars(s, n) { return Array.from(String(s || "")).slice(0, n).join(""); }
 
 function doPost(e) {
   try {
@@ -93,10 +106,11 @@ function doPost(e) {
 
     if (req.task === "pull") {
       if (!same(req.key, cfg.write)) return out({ error: "wrong write key" });
-      return out({ ok: true, decisions: listDecisions(P, DEC_KEEP) });
+      return out({ ok: true, decisions: listDecisions(P, DEC_KEEP), learn: listLearn(P, LEARN_KEEP) });
     }
 
     if (req.task === "decide") return out(decide(P, cfg, req));
+    if (req.task === "learn") return out(learn(P, cfg, req));
 
     if (!same(req.pass, cfg.read)) return out({ error: "wrong passphrase" });
     if (req.task === "ping") return out({ ok: true, app: "scotthub-relay", decide: !!cfg.decide, server: !!cfg.server, usemart: !!cfg.usemart });
@@ -212,6 +226,64 @@ function listDecisions(P, max) {
   const all = P.getProperties(), n = Number(all.dec_n || 0), rows = [];
   for (let i = Math.max(1, n - max + 1); i <= n; i++) {
     try { if (all["dec_" + i]) rows.push(JSON.parse(all["dec_" + i])); } catch (err) { /* skip a torn one */ }
+  }
+  return rows;
+}
+
+// v6: what Scott does with the home cards, for the PC to learn from. Checked field by field - nothing free-form
+// is kept beyond a short card text - and stored as one property per call (learn_<seq>), newest LEARN_KEEP kept.
+function learn(P, cfg, req) {
+  if (!cfg.decide) return { error: "approvals aren't switched on in the relay yet" };
+  if (same(cfg.decide, cfg.read) || same(cfg.decide, cfg.write)) return { error: "decide must be its own secret - fix SCOTT_HUB" };
+  if (!same(req.dpass, cfg.decide)) return { error: "wrong decide pass" };
+  const evs = Array.isArray(req.events) ? req.events.slice(0, LEARN_MAX) : [];
+  const rec = { uid: Utilities.getUuid(), seq: 0, relay_at: new Date().toISOString(), events: [] };
+  const ids = [];                 // every event used up (stored or dropped as junk) - the phone removes exactly these
+  let taken = 0;
+  for (let i = 0; i < evs.length; i++) {
+    const e = evs[i];
+    const id = e && typeof e === "object" && /^[a-z0-9]{1,24}$/.test(String(e.id || "")) ? String(e.id) : "";
+    const how = e && typeof e === "object" ? String(e.how || "") : "";
+    if (LEARN_HOWS.indexOf(how) < 0) { taken++; if (id) ids.push(id); continue; }        // junk: used up, not kept
+    const t = Date.parse(String(e.at || ""));
+    const cls = String(e.cls || ""), open = String(e.open || "");
+    const row = {
+      id: id, how: how, key: cutChars(e.key, LEARN_TEXT), text: cutChars(e.text, LEARN_TEXT),
+      cls: ["bad", "warn", "good", ""].indexOf(cls) >= 0 ? cls : "", open: /^[a-z]{0,12}$/.test(open) ? open : "",
+      at: isNaN(t) ? "" : new Date(t).toISOString()
+    };
+    rec.events.push(row);
+    if (Utilities.newBlob(JSON.stringify(rec)).getBytes().length > LEARN_BYTES) { rec.events.pop(); break; }   // the rest waits for the next call
+    taken++;
+    if (id) ids.push(id);
+  }
+  if (!rec.events.length) return { ok: true, stored: 0, taken: taken, ids: ids };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const n = Number(P.getProperty("learn_n") || 0) + 1;
+    rec.seq = n;
+    const props = { learn_n: String(n) };
+    props["learn_" + n] = JSON.stringify(rec);
+    P.setProperties(props);
+    if (n > LEARN_KEEP) P.deleteProperty("learn_" + (n - LEARN_KEEP));
+    // a byte budget, not just a count: drop the oldest calls while all of them together pass LEARN_TOTAL
+    const all = P.getProperties(), kept = [];
+    let total = 0;
+    for (let i = Math.max(1, n - LEARN_KEEP + 1); i <= n; i++) {
+      const v = all["learn_" + i];
+      if (v) { kept.push(["learn_" + i, v.length]); total += v.length; }
+    }
+    while (total > LEARN_TOTAL && kept.length > 1) { const k = kept.shift(); P.deleteProperty(k[0]); total -= k[1]; }
+    return { ok: true, stored: rec.events.length, taken: taken, ids: ids };
+  } finally { lock.releaseLock(); }
+}
+
+// The newest `max` learn calls, oldest first.
+function listLearn(P, max) {
+  const all = P.getProperties(), n = Number(all.learn_n || 0), rows = [];
+  for (let i = Math.max(1, n - max + 1); i <= n; i++) {
+    try { if (all["learn_" + i]) rows.push(JSON.parse(all["learn_" + i])); } catch (err) { /* skip a torn one */ }
   }
   return rows;
 }
