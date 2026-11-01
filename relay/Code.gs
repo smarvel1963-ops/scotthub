@@ -42,6 +42,11 @@
  * That key can put the "usemart" part and nothing else; no other key can put it. No SCOTT_HUB_USEMART = usemart puts refused.
  * A usemart key equal to write / read / decide / server is ignored.
  *
+ * v7 (Scott 11/01: "should be able to get from my calendar all key bdays"): "get"'s calendar also carries
+ * birthdays = the next 12 months (title + day only) from Google's Contacts "Birthdays" calendar - read by id because
+ * getAllCalendars() leaves it out - plus his own calendar's events titled birthday / bday / anniversary / 🎂, and
+ * birthdays_from = which of the two were read. Cached 1 hour. Nothing else changes; an older phone ignores the fields.
+ *
  * Tasks (POST, body JSON):
  *   {task:"put",    key, part:"masterhub"|"desktop", data:{...}}             PC
  *   {task:"put",    key:<server key>, part:"server", data:{...}}             server (v4)
@@ -309,10 +314,63 @@ function calendar() {
       });
     });
     rows.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
-    return { ok: true, events: rows.slice(0, CAL_MAX), more: Math.max(0, rows.length - CAL_MAX) };
+    const out = { ok: true, events: rows.slice(0, CAL_MAX), more: Math.max(0, rows.length - CAL_MAX) };
+    const b = birthdays(start);
+    if (b.ok) { out.birthdays = b.list; out.birthdays_from = b.from; } else out.birthdays_error = b.error;
+    return out;
   } catch (err) {
     return { ok: false, error: String(err && err.message || err) };   // not authorized yet, etc.
   }
+}
+
+// v7 (Scott 11/01: "should be able to get from my calendar all key bdays"): the next BDAY_DAYS days of birthdays come
+// back as calendar.birthdays = [{title, day:"YYYY-MM-DD"}] (a handful a year), so the phone can show the next one even
+// when it is weeks away. Two sources, both read-only:
+//   1. Google's "Birthdays" calendar (built from Google Contacts) - NOT in getAllCalendars(), so read by its id;
+//   2. yearly events on his own calendar titled birthday / bday / anniversary / 🎂 (the ones Claude adds for him).
+// One that fails is skipped; only when both fail does the phone get birthdays_error. Never breaks the rest of get.
+// birthdays_from = {contacts, mine} says which sources were read, so "none saved" can't hide a missing Contacts calendar.
+// The window is today up to (not including) the same date next year - every date once, leap years too. The answer is
+// kept BDAY_CACHE_S in the script cache: the phone asks every 2 minutes and a year of his calendar is slow to read.
+const BDAY_CAL_IDS = ["addressbook#contacts@group.v.calendar.google.com", "#contacts@group.v.calendar.google.com"];
+const BDAY_MAX = 40;
+const BDAY_CACHE_S = 3600;
+const BDAY_RE = /birthday|\bb-?day\b|🎂|anniversary/i;
+function birthdays(start) {
+  const cache = (function () { try { return CacheService.getScriptCache(); } catch (err) { return null; } })();
+  const ck = "bday7|" + Utilities.formatDate(start, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  try { const hit = cache && cache.get(ck); if (hit) return JSON.parse(hit); } catch (err) { /* read it fresh */ }
+  const r = readBirthdays(start);
+  try { if (cache && r.ok) cache.put(ck, JSON.stringify(r), BDAY_CACHE_S); } catch (err) { /* too big / no cache: fine */ }
+  return r;
+}
+function readBirthdays(start) {
+  const end = new Date(start.getTime()); end.setFullYear(end.getFullYear() + 1);
+  const rows = [], seen = {}, from = { contacts: false, mine: false };
+  // getAllDayStartDate() is midnight in the SCRIPT's zone, so it is read back in that zone; a timed event uses its calendar's
+  const day = (cal, ev) => ev.isAllDayEvent() ? Utilities.formatDate(ev.getAllDayStartDate(), Session.getScriptTimeZone(), "yyyy-MM-dd")
+    : Utilities.formatDate(ev.getStartTime(), (cal.getTimeZone && cal.getTimeZone()) || Session.getScriptTimeZone(), "yyyy-MM-dd");
+  const add = (cal, ev) => {
+    const r = { title: String(ev.getTitle() || "").slice(0, 80), day: day(cal, ev) }, k = r.title + "|" + r.day;
+    if (!seen[k]) { seen[k] = 1; rows.push(r); }
+  };
+  let last = "Birthdays calendar not found";
+  for (let i = 0; i < BDAY_CAL_IDS.length && !from.contacts; i++) {
+    try {
+      const cal = CalendarApp.getCalendarById(BDAY_CAL_IDS[i]);
+      if (!cal) continue;
+      cal.getEvents(start, end).forEach(function (ev) { add(cal, ev); });
+      from.contacts = true;
+    } catch (err) { last = String(err && err.message || err); }
+  }
+  try {
+    const mine = CalendarApp.getDefaultCalendar();
+    mine.getEvents(start, end).forEach(function (ev) { if (BDAY_RE.test(String(ev.getTitle() || ""))) add(mine, ev); });
+    from.mine = true;
+  } catch (err) { last = String(err && err.message || err); }
+  if (!from.contacts && !from.mine) return { ok: false, error: last.slice(0, 160) };
+  rows.sort(function (a, b) { return a.day < b.day ? -1 : a.day > b.day ? 1 : 0; });
+  return { ok: true, list: rows.slice(0, BDAY_MAX), from: from };
 }
 
 function out(o) {
