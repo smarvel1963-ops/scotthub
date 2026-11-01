@@ -22,6 +22,11 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- v19 TILES LOOK (Scott 11/01): shown only when this phone's look is "tiles" (off by default) -->
+  <div id="tlTop" class="tl-top">
+    <div class="tl-brand"><i></i>SCOTT HUB</div>
+    <div class="tl-acts"><button class="tl-ico" data-act="refresh" aria-label="Refresh">🔄</button><button class="tl-pill" data-act="look-classic">Classic</button></div>
+  </div>
   <header id="hero" class="hero">
     <div class="scene" aria-hidden="true"></div>
     <div class="hero-in">
@@ -33,15 +38,19 @@
   </header>
 
   <main>
+    <section id="tlHero" class="tl-hero" aria-label="Now"></section>
+
     <section class="band" aria-label="What needs you">
       <p id="brief" class="brief hidden"></p>
       <h2>What needs you</h2>
       <ul id="needs" class="needs"><li class="muted">Loading…</li></ul>
     </section>
 
-    <section class="band" aria-label="At a glance">
+    <section id="glanceBand" class="band" aria-label="At a glance">
       <div id="glance" class="glance"></div>
     </section>
+
+    <div id="tiles" class="tl-grid" aria-label="At a glance"></div>
 
     <nav class="bubbles" aria-label="Sections">
       <button data-open="approvals" id="apBubble" class="hidden"><span>🗳️</span>Approvals</button>
@@ -57,6 +66,7 @@
       <button data-open="calendar"><span>📅</span>Calendar</button>
       <button data-open="todo"><span>✅</span>To-do</button>
       <button data-act="refresh"><span>🔄</span>Refresh</button>
+      <button data-act="look-tiles"><span>✨</span>New look</button>
     </nav>
   </main>
 

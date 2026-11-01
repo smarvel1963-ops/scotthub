@@ -40,6 +40,12 @@
  * opens also go to the relay (task "learn", relay v6, the decide pass - this phone only sends when it holds one), so
  * the PC (scott_hub_upload, switch "learn") keeps them for Claude to learn from. Queued here and resent until the
  * relay takes them (an older relay says no - they wait). Each bills run's row also shows everyday spending per week.
+ * v19 TILES LOOK (Scott 11/01, after a tile dashboard he saw: "want our stuff to be more modern as we go" + "we can
+ * experiment on scott hub and load that hub with things i need to know about every day about my life"): one screen at a
+ * glance - a clock + weather tile, What needs you (top 3), then one tile per area with its key number; a tile opens the
+ * same sheet its bubble does. Bright by day, dark after sunset. Weather + National Weather Service alerts for a town kept
+ * on THIS phone (never in this public code). SWITCH: off by default - "✨ New look" turns it on for this phone,
+ * "Classic" turns it off (scotthub.look); ?look=tiles|classic does the same from a link.
  */
 "use strict";
 
@@ -92,6 +98,7 @@ function takePassFromLink() {
 
 // ── fetch ─────────────────────────────────────────────────────
 async function load() {
+  if (tilesOn()) loadWeather();      // v19: its own 30-min cache; never waits on the relay
   const pass = store.get(K_PASS);
   if (!pass) { $("#setup").classList.remove("hidden"); return; }
   try {
@@ -186,9 +193,9 @@ function orderBubbles() {
   if (!nav || !nav.querySelectorAll) return;
   const u = loadJ(K_USE, {}), btns = Array.from(nav.querySelectorAll("button[data-open]"));
   if (btns.reduce((s, b) => s + useCount(u, b.dataset.open), 0) < LEARN_AFTER) return;   // not enough to learn from yet
-  const refresh = nav.querySelector("button[data-act]");
+  const acts = Array.from(nav.querySelectorAll("button[data-act]"));     // Refresh (+ v19 New look) stay last, in order
   btns.map((b, i) => ({ b, i, n: useCount(u, b.dataset.open) })).sort((a, z) => z.n - a.n || a.i - z.i).forEach(x => nav.appendChild(x.b));
-  if (refresh) nav.appendChild(refresh);
+  acts.forEach(b => nav.appendChild(b));
 }
 const cardKey = n => (n.open || "-") + "|" + String(n.text || "").replace(/[0-9$,.:+\-]+/g, "#");
 function cardState(n) {
@@ -225,6 +232,7 @@ function tickClock() {
   const hr = Number(now.toLocaleString("en-US", { timeZone: TZ, hour: "numeric", hour12: false }));
   $("#hello").textContent = (hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening") + ", Scott";
   paintFresh();
+  renderTlHero();          // v19: also flips bright/dark at sunrise and sunset
 }
 
 function paintFresh() {
@@ -379,6 +387,12 @@ function needs() {
   const out = [], m = mh(), d = dk(), h = m.health || {}, b = m.bets || {}, mo = d.money || {};
   const add = (cls, text, sub, open) => out.push({ cls, text, sub, open });
 
+  // v19: National Weather Service alerts for the town set on this phone (tiles look). A Warning is a red card on top;
+  // a Watch is a yellow card added last; advisories stay on the clock tile's pill only.
+  const wa = wxAlerts(), wWarn = wa.filter(x => /warning/i.test(x.event)), wWatch = wa.filter(x => /watch/i.test(x.event) && !/warning/i.test(x.event));
+  const wxCard = (cls, l) => add(cls, "⚠️ " + l.slice(0, 2).map(x => x.event).join(" · ") + (l.length > 2 ? " +" + (l.length - 2) : ""), l[0].headline, "weather");
+  if (wWarn.length) wxCard("bad", wWarn);
+
   const a = ageMin(m.generated_at), S = serverOn() ? sv13() : null;
   if (S) add("warn", "PC off - server report", (a != null ? "PC quiet since " + t12(m.generated_at) + ". " : "") + "The server checks in every 5 min - its health is under Health. Bets and money are the PC's from then.", "health");
   else if (a != null && a > STALE_MIN) {
@@ -460,6 +474,7 @@ function needs() {
 
   const oc = h.odds_credits || {}, act = oc[(oc.active_key || "primary") + "_credits"];
   if (typeof act === "number" && act >= 0 && act < 50000) add("warn", "Odds API key running low: " + act.toLocaleString() + " credits", "", "health");
+  if (wWatch.length) wxCard("warn", wWatch);
 
   if (!out.length) add("good", "All quiet. Nothing needs you right now.", "", null);
   return out;
@@ -486,7 +501,8 @@ function renderNeeds() {
     : `<span class="cbtns"><button class="cb" data-snooze="${esc(n.key)}">Not now</button><button class="cb" data-done="${esc(n.key)}">Done</button></span>`;
   const li = n => `<li class="${n.cls}${n.st ? " tucked" : ""}"${n.open ? ` data-open="${n.open}" data-key="${esc(n.key)}" role="button" tabindex="0"` : ""}>` +
     `${esc(n.text)}${n.st ? ` <em>· ${n.st === "quiet" ? "quiet - set aside " + QUIET_AFTER + "+ times" : n.st}</em>` : ""}${n.sub ? `<small>${esc(n.sub)}</small>` : ""}${btns(n)}</li>`;
-  const top = live.slice(0, NEEDS_MAX), rest = live.slice(NEEDS_MAX).concat(tucked);
+  const cap = tilesOn() ? TL_NEEDS_MAX : NEEDS_MAX;      // v19: the tiles carry the rest at a glance
+  const top = live.slice(0, cap), rest = live.slice(cap).concat(tucked);
   let h = top.map(li).join("");
   if (!live.length) h += `<li class="good">All quiet. Nothing needs you right now.</li>`;
   if (NEEDS_ALL) h += rest.map(li).join("");
@@ -851,6 +867,27 @@ const SHEETS = {
     h += `<p class="note">Reply opens the item in UseMart → Account → Owner controls → Support & reports (sign in as an admin on this phone once).</p>`;
     return h;
   }],
+  weather: ["🌤️ Weather", () => {          // v19
+    const P = loadJ(K_PLACE, null), edit = `<button class="pay undo" data-act="place-edit">${P ? "Change town" : "Set your town"}</button>`;
+    if (!P) return `<p class="note">No town set on this phone yet.</p>` + edit;
+    let h = sec("📍 " + P.label + (WX && WX.at ? " · updated " + ago((Date.now() - WX.at) / 60000) : ""));
+    if (wxMine()) {
+      const fin2 = v => Number.isFinite(Number(v)), rn = Math.round(Number(WX.rain));
+      h += row("Now", Math.round(WX.temp) + "°", "");
+      if (fin2(WX.hi) && fin2(WX.lo)) h += row("Today", "High " + Math.round(WX.hi) + "° · Low " + Math.round(WX.lo) + "°", Number.isFinite(rn) ? "rain chance " + rn + "%" : "");
+      if (fin2(WX.lo2)) h += row("Tonight", "Low " + Math.round(Math.min(Number(WX.lo2), WX.temp)) + "°", "");
+      const s = arr(WX.sun)[0];
+      if (s) h += row("Sunrise · sunset", t12(new Date(s[0]).toISOString()) + " · " + t12(new Date(s[1]).toISOString()), "the new look turns bright at sunrise and dark at sunset");
+      const wa = wxAlerts(), age = wxAlertsAge();
+      h += sec("Weather alerts · National Weather Service" + (isFinite(age) ? " · checked " + ago(age / 60000) : ""));
+      h += wa.map(a => row(a.event, a.ends ? "until " + when(a.ends) : "", a.headline, /warning/i.test(a.event) ? "neg" : "old")).join("");
+      if (WX.alertsErr) h += `<p class="note neg">Couldn't reach the Weather Service on the last try - retrying every 5 min. Not an all-clear.` +
+        `${isFinite(age) ? " Last good check " + esc(ago(age / 60000)) + "." : ""}</p>`;
+      else if (age > WX_CLEAR_MS) h += `<p class="note neg">${isFinite(age) ? "Last good check " + esc(ago(age / 60000)) : "Not checked yet"} - not current. Tap 🔄 or check a weather app.</p>`;
+      else if (!wa.length) h += `<p class="note">No alerts. 👍</p>`;
+    } else h += `<p class="note">Getting the forecast…</p>`;
+    return h + `<p class="note">The town stays on this phone only. Forecast from Open-Meteo, alerts from weather.gov.</p>` + edit;
+  }],
   todo: ["✅ To-do", () => {
     const hl = mh().hot_list || {}, le = (dk().business || {}).loose_ends || {};
     let h = sec("HOT LIST · " + (hl.open_total ?? "?") + " open");
@@ -871,15 +908,266 @@ function openSheet(key) {
 
 function render() {
   paintFresh();
+  renderTlHero();
   if (!DATA) { $("#needs").innerHTML = `<li class="bad">Can't load yet${LAST_ERR ? `<small>${esc(LAST_ERR)}</small>` : ""}</li>`; return; }
   $("#apBubble").classList.toggle("hidden", !ap().enabled);
   $("#umBubble").classList.toggle("hidden", !umHave());
   renderBrief();
   renderNeeds();
   renderGlance();
+  renderTiles();
   orderBubbles();
   const open = $("#sheet:not(.hidden)") && $("#sheet").dataset.key;
   if (open) openSheet(open);
+}
+
+// ── v19 TILES LOOK (switch: scotthub.look = "tiles"; off by default) ──
+const K_LOOK = "scotthub.look", K_PLACE = "scotthub.place", K_WX = "scotthub.wx";
+const TL_NEEDS_MAX = 3, WX_EVERY_MS = 30 * 60000, WX_RETRY_MS = 5 * 60000;
+const WX_URL = "https://api.open-meteo.com/v1/forecast", GEO_URL = "https://geocoding-api.open-meteo.com/v1/search";
+const WX_OLD_MS = 3 * 3600000;       // alerts older than this are never shown as an all-clear
+let WX = loadJ(K_WX, null), WX_BUSY = false, WX_AGAIN = false, WX_TRIED = 0, PLACE_EDIT = false, PLACE_MSG = "", PLACE_TYPED = null;
+const tilesOn = () => store.get(K_LOOK) === "tiles";
+
+// Weather for a town typed once on this phone (same lookups as Day Hub: a ZIP goes to Zippopotam - exact;
+// a name to Open-Meteo's US search). Kept to 2 decimals (about a kilometre) - only ever sent to the weather services.
+const ZIP5 = /^\s*(\d{5})(?:-\d{4})?\s*$/;
+// "Town, ST": Open-Meteo gives the full state name, so a 2-letter state is matched through this list.
+const US_ST = Object.fromEntries(("AL Alabama|AK Alaska|AZ Arizona|AR Arkansas|CA California|CO Colorado|CT Connecticut|DE Delaware|" +
+  "DC District of Columbia|FL Florida|GA Georgia|HI Hawaii|ID Idaho|IL Illinois|IN Indiana|IA Iowa|KS Kansas|KY Kentucky|LA Louisiana|" +
+  "ME Maine|MD Maryland|MA Massachusetts|MI Michigan|MN Minnesota|MS Mississippi|MO Missouri|MT Montana|NE Nebraska|NV Nevada|" +
+  "NH New Hampshire|NJ New Jersey|NM New Mexico|NY New York|NC North Carolina|ND North Dakota|OH Ohio|OK Oklahoma|OR Oregon|" +
+  "PA Pennsylvania|RI Rhode Island|SC South Carolina|SD South Dakota|TN Tennessee|TX Texas|UT Utah|VT Vermont|VA Virginia|" +
+  "WA Washington|WV West Virginia|WI Wisconsin|WY Wyoming").split("|").map(s => [s.slice(0, 2).toLowerCase(), s.slice(3).toLowerCase()]));
+async function findPlace(q) {
+  const z = ZIP5.exec(q || "");
+  if (z) {
+    const r = await fetch("https://api.zippopotam.us/us/" + z[1]);
+    if (!r.ok) return null;
+    const p = arr((await r.json()).places)[0];
+    return p ? { lat: Number(p.latitude), lon: Number(p.longitude), label: p["place name"] + ", " + p["state abbreviation"] } : null;
+  }
+  const name = String(q || "").split(",")[0].trim(), st = (String(q || "").split(",")[1] || "").trim().toLowerCase();
+  if (!name) return null;
+  const j = await (await fetch(GEO_URL + "?name=" + encodeURIComponent(name) + "&count=10&language=en&countryCode=US")).json();
+  const want = US_ST[st] || st, res = arr(j.results).filter(x => x && Number.isFinite(Number(x.latitude)));
+  // a state that matches nothing is "not found" (try the ZIP) - never a same-named town somewhere else
+  const isSt = a => a === want || (st === "dc" && /^washington,? d\.?c/.test(a));
+  const hit = st ? res.find(x => isSt(String(x.admin1 || "").toLowerCase())) : res[0];
+  return hit ? { lat: Number(hit.latitude), lon: Number(hit.longitude), label: hit.name + ", " + (hit.admin1 || "US") } : null;
+}
+
+async function loadWeather(force) {
+  const P = loadJ(K_PLACE, null), now = Date.now();
+  if (!P) return;
+  if (WX_BUSY) { if (force) WX_AGAIN = true; return; }        // a town saved mid-fetch runs again right after
+  const fresh = WX && WX.place === P.label && now - WX.at < (WX.alertsErr ? WX_RETRY_MS : WX_EVERY_MS);
+  if (!force && (fresh || now - WX_TRIED < WX_RETRY_MS)) return;
+  WX_BUSY = true; WX_TRIED = now;
+  const mine = WX && WX.place === P.label ? WX : null;
+  let w = null;
+  try {
+    // unixtime: sunrise / sunset arrive as real instants, so a daylight-saving change can't shift them an hour
+    const q = "latitude=" + P.lat + "&longitude=" + P.lon + "&current=temperature_2m,weather_code" +
+      "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset" +
+      "&temperature_unit=fahrenheit&timezone=auto&timeformat=unixtime&forecast_days=2";
+    const r = await fetch(WX_URL + "?" + q), j = await r.json(), D = obj(j.daily), C = obj(j.current);
+    if (!r.ok || j.error || !isNum(C.temperature_2m)) throw new Error("forecast");   // an error reply never replaces a good forecast
+    const ms = s => Number(s) * 1000, hi = arr(D.temperature_2m_max), lo = arr(D.temperature_2m_min);
+    w = { at: now, place: P.label, temp: C.temperature_2m, code: C.weather_code, hi: hi[0], lo: lo[0], lo2: lo[1],
+      rain: arr(D.precipitation_probability_max)[0],
+      sun: arr(D.sunrise).map((s, i) => [ms(s), ms(arr(D.sunset)[i])]).filter(x => x.every(Number.isFinite)),
+      alerts: mine ? arr(mine.alerts) : [], alertsAt: mine ? mine.alertsAt : null };       // the last alerts check carries over
+    if (isNum(w.hi)) w.hi = Math.max(w.hi, w.temp);        // never a high below now
+    if (isNum(w.lo)) w.lo = Math.min(w.lo, w.temp);
+  } catch (e) { w = mine ? Object.assign({}, mine) : null; }     // keep the last forecast; try again in 5 min
+  if (w) {
+    try {       // checked even when the forecast failed. An error reply, a non-US point or a rate limit = "unavailable"
+      const ra = await fetch("https://api.weather.gov/alerts/active?point=" + P.lat + "," + P.lon), a = await ra.json();
+      if (!ra.ok || !Array.isArray(a.features)) throw new Error("alerts");
+      w.alerts = a.features.map(f => obj(f && f.properties)).slice(0, 6)
+        .map(p => ({ event: String(p.event || "Weather alert"), headline: String(p.headline || ""), ends: String(p.ends || p.expires || "") }));
+      w.alertsAt = now; w.alertsErr = false;
+    } catch (e) { w.alertsErr = true; }
+    WX = w; store.set(K_WX, JSON.stringify(w));
+  }
+  WX_BUSY = false;
+  render();
+  if (WX_AGAIN) { WX_AGAIN = false; loadWeather(true); }
+}
+const isNum = v => typeof v === "number" && Number.isFinite(v);
+const wxMine = () => { const P = loadJ(K_PLACE, null); return !!(P && WX && WX.place === P.label && isNum(WX.temp)); };
+// How old the last GOOD alerts check is. Green "No weather alerts" only under 45 min; nothing at all past 3 hours.
+const WX_CLEAR_MS = 45 * 60000;
+const wxAlertsAge = () => WX && isNum(WX.alertsAt) ? Date.now() - WX.alertsAt : Infinity;
+const wxOld = () => wxAlertsAge() > WX_OLD_MS;
+// Active NWS alerts for this phone's town (tiles look) from the last good check under 3 hours old - a failed
+// re-check keeps showing the last known Warning until its own end time, never hides it.
+function wxAlerts() {
+  if (!tilesOn() || !wxMine() || wxOld()) return [];
+  return arr(WX.alerts).filter(a => a && (!a.ends || !(Date.parse(a.ends) < Date.now())));
+}
+function wxIcon(code, day) {
+  const c = Number(code);
+  if (c === 0) return day ? "☀️" : "🌙";
+  if (c <= 2) return day ? "🌤️" : "☁️";
+  if (c === 3) return "☁️";
+  if (c <= 48) return "🌫️";
+  if (c <= 67 || (c >= 80 && c <= 82)) return "🌧️";
+  if (c <= 77 || c === 85 || c === 86) return "🌨️";
+  return "⛈️";
+}
+
+// Bright from sunrise to sunset (the forecast's own times); 7 AM - 6 PM by the clock until a town is set.
+function dayPhase() {
+  const now = Date.now(), p = WX ? arr(WX.sun).find(x => Array.isArray(x) && now < x[1]) : null;
+  if (p) return now >= p[0] ? { day: true, next: p[1] } : { day: false, next: p[0] };
+  const hr = Number(new Date().toLocaleString("en-US", { timeZone: TZ, hour: "numeric", hour12: false }));
+  return { day: hr >= 7 && hr < 18, next: null };
+}
+function applyLook() {
+  const on = tilesOn(), ph = dayPhase(), b = document.body;
+  b.classList.toggle("tl", on); b.classList.toggle("tl-day", on && ph.day); b.classList.toggle("tl-night", on && !ph.day);
+  const m = document.querySelector('meta[name="theme-color"]');
+  if (m) m.setAttribute("content", on && ph.day ? "#1d4ed8" : "#0b1020");
+  return ph;
+}
+
+// The overnight low after sunset (tomorrow's minimum), the day's low before it - never above the temperature now.
+function wxLow() {
+  const s = arr(WX.sun)[0], tonight = Array.isArray(s) && Date.now() > s[1] && isNum(WX.lo2);
+  return tonight ? Math.min(Number(WX.lo2), WX.temp) : Number(WX.lo);
+}
+// The alerts line under the weather: red / amber pill for an alert, amber when it can't be trusted, green only when checked and clear.
+function wxAlertLine(P) {
+  const wa = wxAlerts(), red = wa.some(x => /warning/i.test(x.event)), go = `data-open="weather" role="button" tabindex="0"`;
+  const age = wxAlertsAge(), checked = isFinite(age) ? "checked " + ago(age / 60000) : "not checked yet";
+  if (wa.length) return `<div class="tl-al ${red ? "bad" : "warn"}" ${go}>⚠️ ${esc(wa.map(x => x.event).join(" · "))}` +
+    `${age > WX_CLEAR_MS || WX.alertsErr ? " · " + esc(checked) : ""}</div>`;
+  if (WX.alertsErr) return `<div class="tl-al warn" ${go}>Weather alerts unavailable - retrying${isFinite(age) ? " · last " + esc(checked) : ""}</div>`;
+  if (age > WX_CLEAR_MS) return `<div class="tl-al warn" ${go}>Weather alerts ${esc(checked)}</div>`;
+  return `<div class="tl-al"><span class="dotg"></span>No weather alerts · ${esc(P.label)}</div>`;
+}
+function renderTlHero() {
+  const ph = applyLook(), el = $("#tlHero"), ae = document.activeElement;
+  if (!el || !tilesOn() || (ae && ae.tagName === "INPUT" && el.contains(ae))) return;     // never wipe a town being typed
+  try {
+    const now = new Date(), P = loadJ(K_PLACE, null);
+    const [hm, ap] = now.toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }).split(/\s+/);
+    const badge = ph.next ? (ph.day ? "🌙 Dark at " : "☀️ Bright at ") + t12(new Date(ph.next).toISOString()) : "";
+    let wx;
+    if (PLACE_EDIT || !P) wx = `<form class="tl-place" data-placeform><input name="q" autocomplete="off" placeholder="Town, ST or ZIP for weather" ` +
+      `value="${esc(PLACE_TYPED != null ? PLACE_TYPED : P ? P.label : "")}"><button type="submit">Save</button>` +
+      (P ? `<button type="button" class="tl-cancel" data-act="place-cancel">Cancel</button>` : "") + `</form>` +
+      (PLACE_MSG ? `<div class="tl-al">${esc(PLACE_MSG)}</div>` : "");
+    else if (wxMine()) {
+      const rain = Math.round(Number(WX.rain)), hi = Math.round(Number(WX.hi)), lo = Math.round(wxLow());
+      wx = `<div class="tl-wx" data-open="weather" role="button" tabindex="0">${wxIcon(WX.code, ph.day)} ${Math.round(WX.temp)}° now` +
+        `${ph.day ? (Number.isFinite(hi) ? " · High " + hi + "°" : "") : (Number.isFinite(lo) ? " · Low " + lo + "°" : "")}${rain >= 30 ? " · 💧 " + rain + "%" : ""}</div>` + wxAlertLine(P);
+    } else wx = `<div class="tl-wx" data-open="weather" role="button" tabindex="0">Weather for ${esc(P.label)}…</div>`;
+    const f = $("#fresh");
+    el.innerHTML = (badge ? `<span class="tl-badge">${esc(badge)}</span>` : "") +
+      `<div class="tl-hello">${esc($("#hello").textContent)}</div><div class="tl-clock">${esc(hm)}<small>${esc(ap || "")}</small></div>` +
+      `<div class="tl-date">${esc($("#date").textContent)}</div>${wx}<div class="${esc(f.className)}">${esc(f.textContent)}</div>`;
+  } catch (e) { el.innerHTML = `<div class="tl-al warn">Clock tile hit a snag: ${esc(e.message || e)}</div>`; }
+}
+
+// One tile per area: its key number, a pill (green / red / amber) and one line under it. Tapping opens the area's
+// sheet. The first four stay put (the daily core); the rest follow what he opens most, as the bubbles do (v17).
+function tileList() {
+  const m = mh(), d = dk(), b = m.bets || {}, td = b.today || {}, wk = b.week || {}, t5 = b.top5 || {}, h = m.health || {}, T = [];
+  const add = (open, icon, title, value, unit, chip, tone, sub, alarm) => T.push({ open, icon, title, value, unit, chip, tone, sub, alarm });
+  const pill = n => n == null ? "" : sign(n);
+  add("bets", "🎯", "Today", td.record || "-", "", td.units != null ? units(td.units) : "", pill(td.units), td.pending ? td.pending + " still pending" : "nothing pending");
+  if (finHave()) {
+    const F = fin(), tp = obj(F.till_payday), n = arr(F.chase).length, short = Number(tp.total) < 0;
+    add("money", "💵", "Till payday", money(tp.total), "", tp.total == null ? "" : short ? "SHORT" : "OK", short ? "neg" : "pos",
+        (isYmd(F.next_payday) ? "payday " + dayName(F.next_payday) : "") + (n ? " · " + n + " to chase" : ""), short ? "bad" : "");
+  } else {
+    const due = dueOpen(d.money || {});
+    add("money", "💵", "Bills · 7 days", money(due.reduce((s, x) => s + Number(x.amount || 0), 0)), "", "", "", due.length + " still to pay");
+  }
+  const te = todayEvents(), nx = te.filter(e => !e.allDay)[0];
+  if (nx) {
+    const mins = Math.round((new Date(nx.start).getTime() - Date.now()) / 60000);
+    add("calendar", "📅", "Next up", t12(nx.start), "", mins <= 0 ? "NOW" : mins <= 120 ? "in " + (mins < 60 ? mins + " min" : Math.round(mins / 6) / 10 + " h") : "", mins <= 60 ? "old" : "", nx.title);
+  } else add("calendar", "📅", "Next up", "Clear", "", "", "", te.length ? te.length + " all-day item" + (te.length > 1 ? "s" : "") + " today" : "nothing else today");
+  // Systems: "All up" only when nothing at all is wrong - red alerts, a bot down, a silent server, the app not
+  // running (the same things What needs you flags); a quiet PC is amber, the server's own report when the PC is off.
+  const on = serverOn(), pc = h.pc || {}, sv = h.server || {};
+  const bots = Object.values(on ? obj(sv13().bots) : obj(sv.bots)), up = bots.filter(x => x === true).length, down = bots.length - up;
+  const fails = on ? svAlerts(sv13()).filter(x => x.severity === "FAIL").length : healthAlerts().shown.filter(x => x.severity === "FAIL").length;
+  const silent = !on && sv.alive === false, appOff = !on && pc.active === false, n = fails + down + (silent ? 1 : 0) + (appOff ? 1 : 0);
+  const probs = [fails ? fails + " red alert" + (fails > 1 ? "s" : "") : "", down ? down + " bot" + (down > 1 ? "s" : "") + " down" : "",
+    silent ? "server silent" : "", appOff ? "app not running" : ""].filter(Boolean).join(" · ");
+  const mark = v => v === true ? "✓" : v === false ? "✗" : "?";
+  const okLine = "PC " + mark(pc.active) + " · server " + (on ? "✓" : mark(sv.alive)) + " · " + up + "/" + bots.length + " bots";
+  if (on) add("health", "🩺", "Systems", "PC off", "", n ? "FIX" : "SERVER", n ? "neg" : "old", probs || "server report · " + up + "/" + bots.length + " bots", n ? "bad" : "warn");
+  else if (pcStale()) add("health", "🩺", "Systems", "PC quiet", "", "STALE", "old", "last report " + ago(ageMin(m.generated_at)), "warn");
+  else add("health", "🩺", "Systems", n ? String(n) : "All up", n ? (n > 1 ? "problems" : "problem") : "", n ? "FIX" : "OK", n ? "neg" : "pos", probs || okLine, n ? "bad" : "");
+  if (ap().enabled) {
+    const w = apWaiting(), ready = fx().enabled ? fxList().filter(f => f.status === "fix_ready").length : 0;
+    add("approvals", "🗳️", "Approvals", String(w.length), "waiting", ready ? ready + " FIX READY" : w.length ? "YOUR CALL" : "", ready ? "pos" : w.length ? "old" : "",
+        w.length ? w[0].id + " " + w[0].ask : "nothing waiting", w.length ? "warn" : "");
+  }
+  if (umHave()) {
+    const U = um(), n = Number(U.waiting) || 0, late = Number(U.over_24h) || 0, it = umItems()[0], age = umAge(), old = age != null && age > UM_STALE_MIN;
+    add("usemart", "🛒", "UseMart", String(n), "waiting", late ? late + " OVER 24 H" : old ? "OLD" : "", late ? "neg" : old ? "old" : "",
+        old ? "last update " + ago(age) : it ? it.name + ": " + it.topic : "all answered", late ? "bad" : n || old ? "warn" : "");
+  }
+  add("bets", "📆", "Last 7 days", units(wk.units), "", wk.win_pct != null ? wk.win_pct + "%" : "", pill(wk.units), wk.record || "");
+  add("bets", "⭐", "Top 5", t5.wins != null ? t5.wins + "-" + t5.losses + "-" + t5.pushes : "-", "", t5.units != null ? units(t5.units) : "", pill(t5.units), t5.since ? "since " + dayName(t5.since) : "");
+  const pg = arr(obj(m.pages).pages).filter(p => p && typeof p === "object"), pend = pg.reduce((s, p) => s + (Number(p.pending) || 0), 0);
+  const best = pg.filter(p => obj(p.today).record && p.today.record !== "0-0").sort((a, z) => Number(z.today.units || 0) - Number(a.today.units || 0))[0];
+  add("pages", "📊", "Pages", String(pend), "pending", "", "", best ? "best today: " + String(best.page || "").replace(/_/g, " ") + " " + best.today.record : pg.length + " pages");
+  const em = d.email || {}, dead = arr(em.inboxes).filter(i => i.status && i.status !== "ok").length;
+  add("email", "📧", "Email", String(em.important_count ?? "-"), "important", dead ? dead + " INBOX OFF" : "", dead ? "old" : "",
+      (em.recruiter_count || 0) + " recruiter" + (em.recruiter_count === 1 ? "" : "s") + " · " + (em.job_alerts || 0) + " job alerts");
+  const adRows = [].concat(...arr((d.ads || {}).sections).filter(s => /^ADS/i.test(s.title)).map(s => arr(s.rows))), adBad = adRows.filter(r => r.state === "FAILED").length;
+  add("ads", "📣", "Ads", adRows.length ? (adRows.length - adBad) + "/" + adRows.length : "-", "ran", adRows.length ? adBad ? adBad + " FAILED" : "ALL RAN" : "", adBad ? "neg" : "pos", "yesterday's posting");
+  const bz = d.business || {}, fn = bz.funnel || {}, dc = obj(obj(bz.followers).discord).count, bk = arr(bz.books)[0];
+  const sl = arr(obj(em.sales).rows).filter(r => r.date >= addDays(todayCT(), -2)).length;
+  add("business", "📈", "Business", String(fn.whop_active ?? "-"), "Whop", sl ? sl + " NEW SALE" + (sl > 1 ? "S" : "") : "", sl ? "pos" : "",
+      [dc != null ? "Discord " + dc : "", bk && bk.rank ? "book #" + Number(bk.rank).toLocaleString() : ""].filter(Boolean).join(" · "));
+  const c = d.cmmg || {};
+  add("cmmg", "🏢", "CMMG", c.company ? money(c.scott_share) : "-", "", "", "",       // always here: the sheet also holds the posted record
+      c.company ? "your 50%" + (isYmd(c.last_reconciled) ? " · books " + dayName(c.last_reconciled) : "") : "posted record");
+  const hl = m.hot_list || {}, first = arr(hl.top)[0];
+  add("todo", "✅", "To-do", String(hl.open_total ?? "-"), "open", "", "", first ? String(first.title).replace(/^[^A-Za-z0-9]+/u, "").replace(/\s*\(you.*$/i, "") : "");
+  return T;
+}
+const TL_FIXED = 4;
+function renderTiles() {
+  const g = $("#tiles");
+  if (!g || !tilesOn()) return;
+  try {       // a malformed row shows here; it never stops load() / the refresh behind it
+    const u = loadJ(K_USE, {}), all = tileList(), fixed = all.slice(0, TL_FIXED);
+    const rest = all.slice(TL_FIXED).map((t, i) => ({ t, i, n: useCount(u, t.open) }));
+    if (rest.reduce((s, x) => s + x.n, 0) >= LEARN_AFTER) rest.sort((a, z) => z.n - a.n || a.i - z.i);
+    g.innerHTML = fixed.concat(rest.map(x => x.t)).map(t =>
+      `<div class="tl-t${t.alarm ? " " + t.alarm : ""}" data-open="${esc(t.open)}" role="button" tabindex="0">` +
+      `<div class="tl-k"><span>${t.icon}</span>${esc(t.title)}</div>` +
+      `<div class="tl-v">${esc(t.value)}${t.unit ? `<small>${esc(t.unit)}</small>` : ""}</div>` +
+      (t.chip ? `<span class="tl-c ${esc(t.tone || "")}">${esc(t.chip)}</span>` : "") +
+      (t.sub ? `<div class="tl-s">${esc(t.sub)}</div>` : "") + `</div>`).join("");
+  } catch (e) { g.innerHTML = `<div class="tl-t warn">Tiles hit a snag: ${esc(e.message || e)} - Classic still has everything.</div>`; }
+}
+function setLook(look) {
+  store.set(K_LOOK, look);
+  learnEvent("view", { key: "look|" + look, open: "look" + look });     // relay v6: open must be a-z only, 12 max
+  render();
+  if (look === "tiles") loadWeather();
+  window.scrollTo(0, 0);
+}
+async function savePlace(q) {
+  PLACE_TYPED = q; PLACE_MSG = "Looking up " + q + "…"; PLACE_EDIT = true; renderTlHero();
+  let P = null;
+  try { P = await findPlace(q); } catch (e) { /* offline */ }
+  if (!P) { PLACE_MSG = "Couldn't find \"" + q + "\" - try a 5-digit ZIP"; renderTlHero(); return; }     // the typed text stays to fix
+  store.set(K_PLACE, JSON.stringify({ lat: Math.round(P.lat * 100) / 100, lon: Math.round(P.lon * 100) / 100, label: P.label }));
+  PLACE_EDIT = false; PLACE_MSG = ""; PLACE_TYPED = null; WX = null;
+  renderTlHero();
+  await loadWeather(true);
 }
 
 // ── scene: city at night (no files, no network) ───────────────
@@ -927,6 +1215,12 @@ document.addEventListener("click", e => {
   if (a && a.dataset.act === "close") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; }
   if (a && a.dataset.act === "refresh") { $("#fresh").textContent = "refreshing…"; load(); }
   if (a && a.dataset.act === "needs-more") { NEEDS_ALL = !NEEDS_ALL; renderNeeds(); }
+  if (a && (a.dataset.act === "look-tiles" || a.dataset.act === "look-classic")) setLook(a.dataset.act.slice(5));    // v19
+  if (a && a.dataset.act === "place-edit") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; PLACE_EDIT = true; PLACE_MSG = ""; PLACE_TYPED = null; renderTlHero(); }
+  if (a && a.dataset.act === "place-cancel") {          // blur first: on iPhone the text box keeps focus and the redraw would wait
+    if (document.activeElement) document.activeElement.blur();
+    PLACE_EDIT = false; PLACE_MSG = ""; PLACE_TYPED = null; renderTlHero();
+  }
   if (e.target.id === "sheet") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; }
 });
 document.addEventListener("keydown", e => {
@@ -934,7 +1228,17 @@ document.addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target.dataset && (e.target.dataset.open || e.target.dataset.act)) e.target.click();
 });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+document.addEventListener("submit", e => {          // v19: the town for weather
+  const f = e.target.closest("[data-placeform]");
+  if (!f) return;
+  e.preventDefault();
+  const q = String(f.elements.q.value || "").trim();
+  if (document.activeElement) document.activeElement.blur();
+  if (q) savePlace(q);
+});
 
+const LOOK_Q = new URLSearchParams(location.search).get("look");      // v19: ?look=tiles|classic from a link
+if (LOOK_Q === "tiles" || LOOK_Q === "classic") { store.set(K_LOOK, LOOK_Q); history.replaceState(null, "", location.pathname + location.hash); }
 takePassFromLink();
 window.addEventListener("hashchange", () => { takePassFromLink(); load(); });   // link opened while the app is up
 paintScene();
