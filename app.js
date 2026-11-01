@@ -46,6 +46,11 @@
  * same sheet its bubble does. Bright by day, dark after sunset. Weather + National Weather Service alerts for a town kept
  * on THIS phone (never in this public code). SWITCH: off by default - "✨ New look" turns it on for this phone,
  * "Classic" turns it off (scotthub.look); ?look=tiles|classic does the same from a link.
+ * v20 GAMES + BIRTHDAYS (Scott 11/01 "Games + birthdays"), tiles look only: a Games tile from today's card (next start,
+ * live count, "to grade", picks riding - NEVER a day W-L: the slate is every board's picks, the Today tile's record is the
+ * one record) with a Games sheet (live / coming up / waiting on a grade / finished board picks, plus his teams' games from
+ * sports calendars such as the Razorbacks ones), and a Birthdays tile: calendar events titled birthday / bday /
+ * anniversary / 🎂 in the relay's 7 days plus (relay v7) 12 months of Contacts birthdays and his own yearly ones.
  */
 "use strict";
 
@@ -867,6 +872,35 @@ const SHEETS = {
     h += `<p class="note">Reply opens the item in UseMart → Account → Owner controls → Support & reports (sign in as an admin on this phone once).</p>`;
     return h;
   }],
+  games: ["🏟️ Games today", () => {          // v20
+    const G = gamesToday(), t = todayCT(), sd = (mh().bets || {}).session_date;
+    const betsLine = x => x.bets.map(b => b.bet + (b.result ? " (" + b.result + ")" : "")).join(" · ");
+    const grp = (title, list, right, cls) => list.length ? sec(title + " · " + list.length) + list.map(x => row(x.sport + " · " + x.game, right(x), betsLine(x), cls(x))).join("") : "";
+    let h = `<p class="note">Today's card${isYmd(sd) ? " (" + esc(dayName(sd)) + ")" : ""} - every game with a board pick on it, by start time. ` +
+      `Your day's record is the Today tile.</p>`;
+    if (!G.length) h += `<p class="note">No picks on today's card yet.</p>`;
+    h += grp("🔴 Live now", G.filter(x => x.state === "live"), x => "since " + gameWhen(x), () => "");
+    h += grp("⏭️ Coming up", G.filter(x => x.state === "next"), x => gameWhen(x), () => "");
+    h += grp("⏳ Waiting on a grade", G.filter(x => x.state === "wait"), x => gameWhen(x), () => "old");
+    h += grp("✅ Finished · board picks", G.filter(x => x.state === "done"), x => x.w + "-" + x.l, x => x.w > x.l ? "pos" : x.l > x.w ? "neg" : "");
+    const mine = calEvents().filter(e => SPORT_CAL.test(String(e.cal || "")) && evDay(e) >= t);
+    if (mine.length) h += sec("🏈 Your teams · next 7 days (Google Calendar)") + mine.slice(0, 10).map(e =>
+      row(e.title || "(no title)", (evDay(e) === t ? "Today" : dayName(evDay(e))) + (e.allDay ? "" : " " + t12(e.start)), e.cal || "")).join("");
+    if (CAL && CAL.more) h += `<p class="note">The calendar list was cut short (${esc(CAL.more)} later events) - a team game late in the week may be missing.</p>`;
+    return h;
+  }],
+  dates: ["🎂 Birthdays & dates", () => {          // v20
+    const D = dateEvents(), wk = D.filter(e => dateIn(e) <= 7), later = D.filter(e => dateIn(e) > 7);
+    const line = e => row((/🎂/u.test(String(e.title)) ? "" : "🎂 ") + e.title, dateDay(e), (dateIn(e) > 1 ? "in " + dateIn(e) + " days · " : "") + (e.cal || ""), dateIn(e) === 0 ? "old" : "");
+    let h = CAL && !CAL.ok ? `<p class="note neg">Google Calendar can't be read: ${esc(CAL.error)}</p>` : "";
+    if (CAL && CAL.birthdays_error) h += `<p class="note neg">Birthdays calendar can't be read: ${esc(CAL.birthdays_error)}</p>`;
+    if (CAL && CAL.birthdays_from && CAL.birthdays_from.contacts === false) h += `<p class="note neg">Google Contacts' Birthdays calendar wasn't found - only your own calendar's birthday events are listed.</p>`;
+    if (CAL && CAL.more) h += `<p class="note">The calendar list was cut short (${esc(CAL.more)} later events) - a birthday on another calendar late in the week may be missing.</p>`;
+    h += sec("This week · " + wk.length) + (wk.length ? wk.map(line).join("") : `<p class="note">None this week.</p>`);
+    if (CAL && Array.isArray(CAL.birthdays)) h += sec("Coming up · next 12 months · " + later.length) + (later.length ? later.map(line).join("") : `<p class="note">Nothing else saved.</p>`);
+    return h + `<p class="note">From Google Contacts (a contact's birthday) and any yearly event on your calendar titled "birthday", "bday", "anniversary" or 🎂. ` +
+      `Tell Claude names and dates and it adds them for you.</p>`;
+  }],
   weather: ["🌤️ Weather", () => {          // v19
     const P = loadJ(K_PLACE, null), edit = `<button class="pay undo" data-act="place-edit">${P ? "Change town" : "Set your town"}</button>`;
     if (!P) return `<p class="note">No town set on this phone yet.</p>` + edit;
@@ -1072,13 +1106,71 @@ function renderTlHero() {
   } catch (e) { el.innerHTML = `<div class="tl-al warn">Clock tile hit a snag: ${esc(e.message || e)}</div>`; }
 }
 
+// ── v20 games + birthdays ──
+// Today's card (bets.slate: each board pick with its game's start and result), one entry per game. A game that started
+// under LIVE_H hours ago with a pick still open is live; older and still open = waiting on a grade. NOTE: the slate is
+// every board's picks (FIRE 10, top 10s, props...), not the official record - so no day W-L is ever totaled from it
+// here; the Today tile's record (page_stats_tracker) is the one record.
+const LIVE_H = 5;
+const SPORT_CAL = /razorback|football|baseball|basketball|hockey|soccer|\bnfl\b|\bnba\b|\bnhl\b|\bmlb\b|ncaa/i;   // his teams' calendars
+const RES_W = /^(WIN|WON|W)$/i, RES_L = /^(LOSS|LOST|L)$/i, RES_DONE = /^(WIN|WON|W|LOSS|LOST|L|PUSH|P|VOID|CANCELL?ED|NO ACTION)$/i;
+// sport + both teams in any order ("A @ B" = "B vs A") - two pages may write the same game either way
+const gameKey = (sport, game) => String(sport || "").toLowerCase() + "|" +
+  String(game || "").toLowerCase().split(/\s+(?:@|vs\.?|v\.?|at)\s+/).map(s => s.replace(/[^\p{L}\p{N}]+/gu, " ").trim()).sort().join("|");
+function gamesToday() {
+  const out = [], now = Date.now();
+  // one game = same matchup within 3 hours (two pages can stamp the same game minutes apart; a doubleheader stays two)
+  arr((mh().bets || {}).slate).filter(x => x && typeof x === "object" && x.start && x.game && Number.isFinite(new Date(x.start).getTime()))
+    .sort((a, z) => new Date(a.start) - new Date(z.start)).forEach(x => {
+      const t = new Date(x.start).getTime(), key = gameKey(x.sport, x.game);
+      let g = out.find(o => o.key === key && t - o.t < 3 * 3600000);
+      if (!g) out.push(g = { t, key, start: x.start, game: String(x.game), sport: String(x.sport || ""), bets: [] });
+      g.bets.push(x);
+    });
+  return out.map(x => {
+    const r = b => String(b.result || "").trim();
+    const open = x.bets.filter(b => !RES_DONE.test(r(b))).length, w = x.bets.filter(b => RES_W.test(r(b))).length, l = x.bets.filter(b => RES_L.test(r(b))).length;
+    return Object.assign(x, { open, w, l, state: x.t > now ? "next" : !open ? "done" : now - x.t < LIVE_H * 3600000 ? "live" : "wait" });
+  });
+}
+// A start time, with its day in front when it isn't today (last night's late game, tomorrow's early one).
+const gameWhen = x => { const d = new Date(x.start).toLocaleDateString("en-CA", { timeZone: TZ });
+  return (d === todayCT() ? "" : new Date(x.start).toLocaleDateString("en-US", { timeZone: TZ, weekday: "short" }) + " ") + t12(x.start); };
+// Birthdays / anniversaries: calendar events in the relay's 7 days titled with one of these, plus (relay v7) the next
+// 12 months from Google Contacts' Birthdays calendar and his own yearly birthday events (calendar.birthdays). Deduped.
+const DATE_RE = /birthday|\bb-?day\b|🎂|anniversary/iu;
+function dateEvents() {
+  const t = todayCT(), seen = new Set(), out = [];
+  const week = calEvents().filter(e => e && DATE_RE.test(String(e.title || "")));
+  const year = arr(CAL && CAL.birthdays).filter(b => b && isYmd(b.day)).map(b => ({ title: String(b.title || ""), start: b.day, allDay: true, cal: "Birthdays" }));
+  week.concat(year).forEach(e => {
+    const k = String(e.title).toLowerCase() + "|" + evDay(e);
+    if (evDay(e) >= t && !seen.has(k)) { seen.add(k); out.push(e); }
+  });
+  return out.sort((a, z) => evDay(a).localeCompare(evDay(z)));
+}
+// "🎂 Mom's birthday" / "Birthday: Sarah" / "Happy Birthday, Mom!" -> the name; anniversaries keep their title.
+const dateWho = e => String(e.title || "").replace(/[🎂🎉🎈️]/gu, "").replace(/['’]s\s+(birthday|b-?day)\b/gi, "")
+  .replace(/\b(happy\s+)?(birthday|b-?day)\b/gi, "").replace(/\s{2,}/g, " ").replace(/^[\s\-–—:,|·!]+|[\s\-–—:,|·!]+$/g, "").trim() || String(e.title || "");
+const dateIn = e => Math.round((new Date(evDay(e) + "T12:00:00") - new Date(todayCT() + "T12:00:00")) / 86400000);
+const dateDay = e => { const n = dateIn(e); return n === 0 ? "Today" : n === 1 ? "Tomorrow" : dayName(evDay(e)); };
+
 // One tile per area: its key number, a pill (green / red / amber) and one line under it. Tapping opens the area's
-// sheet. The first four stay put (the daily core); the rest follow what he opens most, as the bubbles do (v17).
+// sheet. The first six stay put (the daily core); the rest follow what he opens most, as the bubbles do (v17).
 function tileList() {
   const m = mh(), d = dk(), b = m.bets || {}, td = b.today || {}, wk = b.week || {}, t5 = b.top5 || {}, h = m.health || {}, T = [];
   const add = (open, icon, title, value, unit, chip, tone, sub, alarm) => T.push({ open, icon, title, value, unit, chip, tone, sub, alarm });
   const pill = n => n == null ? "" : sign(n);
   add("bets", "🎯", "Today", td.record || "-", "", td.units != null ? units(td.units) : "", pill(td.units), td.pending ? td.pending + " still pending" : "nothing pending");
+  // v20 Games: next start, live count, picks riding - never a second day record (that is the Today tile's job)
+  const G = gamesToday(), nxt = G.filter(x => x.state === "next"), live = G.filter(x => x.state === "live"), wait = G.filter(x => x.state === "wait");
+  const riding = G.reduce((s, x) => s + x.open, 0), picks = n => n + " pick" + (n === 1 ? "" : "s");
+  if (!G.length) add("games", "🏟️", "Games today", "None", "", "", "", "no picks on today's card yet");
+  else if (nxt.length) add("games", "🏟️", "Games today", gameWhen(nxt[0]), "next", live.length ? live.length + " LIVE" : "", "",
+                           nxt[0].sport + " · " + nxt[0].game + " · " + picks(riding) + " riding");
+  else if (live.length) add("games", "🏟️", "Games today", String(live.length), "live", "", "", picks(riding) + " riding" + (wait.length ? " · " + wait.length + " to grade" : ""));
+  else if (wait.length) add("games", "🏟️", "Games today", String(wait.length), "to grade", "", "", picks(riding) + " still open", "warn");
+  else add("games", "🏟️", "Games today", "Done", "", "", "", "every pick graded");
   if (finHave()) {
     const F = fin(), tp = obj(F.till_payday), n = arr(F.chase).length, short = Number(tp.total) < 0;
     add("money", "💵", "Till payday", money(tp.total), "", tp.total == null ? "" : short ? "SHORT" : "OK", short ? "neg" : "pos",
@@ -1105,6 +1197,13 @@ function tileList() {
   if (on) add("health", "🩺", "Systems", "PC off", "", n ? "FIX" : "SERVER", n ? "neg" : "old", probs || "server report · " + up + "/" + bots.length + " bots", n ? "bad" : "warn");
   else if (pcStale()) add("health", "🩺", "Systems", "PC quiet", "", "STALE", "old", "last report " + ago(ageMin(m.generated_at)), "warn");
   else add("health", "🩺", "Systems", n ? String(n) : "All up", n ? (n > 1 ? "problems" : "problem") : "", n ? "FIX" : "OK", n ? "neg" : "pos", probs || okLine, n ? "bad" : "");
+  const DT = dateEvents(), d0 = DT[0], bday = d0 && dateIn(d0) === 0, dwk = DT.filter(e => dateIn(e) <= 7).length;      // v20
+  const far = CAL && Array.isArray(CAL.birthdays);          // relay v7 sends 12 months; an older relay only 7 days
+  add("dates", "🎂", "Birthdays", d0 ? dateDay(d0) : "None", "", bday ? "TODAY" : "", bday ? "old" : "",
+      CAL && !CAL.ok ? "calendar can't be read" : d0 ? dateWho(d0) + (dateIn(d0) > 1 ? " · in " + dateIn(d0) + " days" : "") + (dwk > 1 ? " · +" + (dwk - 1) + " more this week" : "")
+        : CAL && CAL.birthdays_error ? "birthdays can't be read"
+        : far && CAL.birthdays_from && CAL.birthdays_from.contacts === false ? "Contacts birthdays not found"
+        : far ? "none saved in the next 12 months" : CAL && CAL.more ? "calendar list cut short - may be missing some" : "none in the next 7 days", bday ? "warn" : "");
   if (ap().enabled) {
     const w = apWaiting(), ready = fx().enabled ? fxList().filter(f => f.status === "fix_ready").length : 0;
     add("approvals", "🗳️", "Approvals", String(w.length), "waiting", ready ? ready + " FIX READY" : w.length ? "YOUR CALL" : "", ready ? "pos" : w.length ? "old" : "",
@@ -1136,7 +1235,7 @@ function tileList() {
   add("todo", "✅", "To-do", String(hl.open_total ?? "-"), "open", "", "", first ? String(first.title).replace(/^[^A-Za-z0-9]+/u, "").replace(/\s*\(you.*$/i, "") : "");
   return T;
 }
-const TL_FIXED = 4;
+const TL_FIXED = 6;      // Today, Games, Till payday, Next up, Systems, Birthdays
 function renderTiles() {
   const g = $("#tiles");
   if (!g || !tilesOn()) return;
