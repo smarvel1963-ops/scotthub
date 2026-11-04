@@ -54,6 +54,8 @@
  * v21 UPDATE READY + NEW LOOK ON (Scott 11/03: "scott hub never got the down load for amazing new look we built" + "show on
  * front screen update ready"): an update now says so at the top of the front screen, and the tiles are the default.
  * "Classic" still goes back and stays. RELEASE RULE: every push bumps VERSION here, version.json and the cache name in sw.js.
+ * v22 NEW LOOKS TILE (Scott 11/03: "i still dont see updates on my apps", on 1.58.2): the Day Hub + Cruise Hub new looks are off for customers and
+ * only opened from a preview link. All Hubs share this address, so this tile sets each one's look key for THIS phone, with no link to tap.
  */
 "use strict";
 
@@ -636,6 +638,7 @@ function financeBlock() {
   return h;
 }
 
+const HUB_LOOKS = [["dayhub", "Day Hub"], ["cruisehub", "Cruise Hub"]];     // v22: the Hubs with a new look so far
 const SHEETS = {
   bets: ["🎯 Bets", () => {
     const b = mh().bets || {}, p = b.last_published || {};
@@ -926,6 +929,15 @@ const SHEETS = {
     } else h += `<p class="note">Getting the forecast…</p>`;
     return h + `<p class="note">The town stays on this phone only. Forecast from Open-Meteo, alerts from weather.gov.</p>` + edit;
   }],
+  hublooks: ["✨ New looks", () => {
+    let h = `<p class="note">Turns a Hub's new look on or off for this phone only. Customers still see the old look.</p>`;
+    HUB_LOOKS.forEach(([id, name]) => {
+      const on = store.get(id + ".look") === "tiles", here = !!store.get(id + ".v1");
+      h += `<div class="row"><div class="l">${name}<small>${on ? "New look on" : "Old look"}${here ? "" : " · not seen on this phone's browser yet. If it's installed from another browser, this can't reach it"}</small></div>` +
+        `<div class="r"><span class="chip${on ? " on" : ""}" role="button" tabindex="0" data-act="hublook" data-hub="${id}">${on ? "On" : "Off"}</span> <a class="chip" href="../${id}/" target="_blank" rel="noopener">Open</a></div></div>`;
+    });
+    return h + `<p class="note">Close and reopen a Hub if it's already open. Classic Look inside a Hub turns it back off too. Home, Auto, Trip and Money don't have a new look yet.</p>`;
+  }],
   todo: ["✅ To-do", () => {
     const hl = mh().hot_list || {}, le = (dk().business || {}).loose_ends || {};
     let h = sec("HOT LIST · " + (hl.open_total ?? "?") + " open");
@@ -962,7 +974,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "21";
+const VERSION = "22";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1261,6 +1273,7 @@ function tileList() {
       c.company ? "your 50%" + (isYmd(c.last_reconciled) ? " · books " + dayName(c.last_reconciled) : "") : "posted record");
   const hl = m.hot_list || {}, first = arr(hl.top)[0];
   add("todo", "✅", "To-do", String(hl.open_total ?? "-"), "open", "", "", first ? String(first.title).replace(/^[^A-Za-z0-9]+/u, "").replace(/\s*\(you.*$/i, "") : "");
+  add("hublooks", "✨", "New looks", HUB_LOOKS.filter(h => store.get(h[0] + ".look") === "tiles").length + " of " + HUB_LOOKS.length, "on", "", "", "in my other Hubs");
   return T;
 }
 const TL_FIXED = 6;      // Today, Games, Till payday, Next up, Systems, Birthdays
@@ -1342,6 +1355,11 @@ document.addEventListener("click", e => {
   if (a && a.dataset.act === "close") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; }
   if (a && a.dataset.act === "refresh") { $("#fresh").textContent = "refreshing…"; load(); }
   if (a && a.dataset.act === "update") applyUpdate();     // v21
+  if (a && a.dataset.act === "hublook") {                 // v22
+    const k = a.dataset.hub + ".look";
+    store.set(k, store.get(k) === "tiles" ? "classic" : "tiles");
+    openSheet("hublooks"); renderTiles();
+  }
   if (a && a.dataset.act === "needs-more") { NEEDS_ALL = !NEEDS_ALL; renderNeeds(); }
   if (a && (a.dataset.act === "look-tiles" || a.dataset.act === "look-classic")) setLook(a.dataset.act.slice(5));    // v19
   if (a && a.dataset.act === "place-edit") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; PLACE_EDIT = true; PLACE_MSG = ""; PLACE_TYPED = null; renderTlHero(); }
