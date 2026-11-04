@@ -44,13 +44,16 @@
  * experiment on scott hub and load that hub with things i need to know about every day about my life"): one screen at a
  * glance - a clock + weather tile, What needs you (top 3), then one tile per area with its key number; a tile opens the
  * same sheet its bubble does. Bright by day, dark after sunset. Weather + National Weather Service alerts for a town kept
- * on THIS phone (never in this public code). SWITCH: off by default - "✨ New look" turns it on for this phone,
+ * on THIS phone (never in this public code). SWITCH: off by default until v21 - "✨ New look" turns it on for this phone,
  * "Classic" turns it off (scotthub.look); ?look=tiles|classic does the same from a link.
  * v20 GAMES + BIRTHDAYS (Scott 11/01 "Games + birthdays"), tiles look only: a Games tile from today's card (next start,
  * live count, "to grade", picks riding - NEVER a day W-L: the slate is every board's picks, the Today tile's record is the
  * one record) with a Games sheet (live / coming up / waiting on a grade / finished board picks, plus his teams' games from
  * sports calendars such as the Razorbacks ones), and a Birthdays tile: calendar events titled birthday / bday /
  * anniversary / 🎂 in the relay's 7 days plus (relay v7) 12 months of Contacts birthdays and his own yearly ones.
+ * v21 UPDATE READY + NEW LOOK ON (Scott 11/03: "scott hub never got the down load for amazing new look we built" + "show on
+ * front screen update ready"): an update now says so at the top of the front screen, and the tiles are the default.
+ * "Classic" still goes back and stays. RELEASE RULE: every push bumps VERSION here, version.json and the cache name in sw.js.
  */
 "use strict";
 
@@ -103,6 +106,7 @@ function takePassFromLink() {
 
 // ── fetch ─────────────────────────────────────────────────────
 async function load() {
+  checkUpdate();                     // v21: open, resume, Refresh and the timer all look
   if (tilesOn()) loadWeather();      // v19: its own 30-min cache; never waits on the relay
   const pass = store.get(K_PASS);
   if (!pass) { $("#setup").classList.remove("hidden"); return; }
@@ -955,13 +959,37 @@ function render() {
   if (open) openSheet(open);
 }
 
-// ── v19 TILES LOOK (switch: scotthub.look = "tiles"; off by default) ──
+// ── v21 UPDATE READY ──
+// The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
+// what's published; a mismatch shows the button at the top of the front screen, in both looks.
+const VERSION = "21";
+async function checkUpdate() {
+  try {
+    const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    $("#updBar").classList.toggle("hidden", !(Number(j.version) > Number(VERSION)));
+  } catch (e) { /* offline: the next check tries again */ }
+}
+let UPDATING = false;
+async function applyUpdate() {
+  if (UPDATING) return;
+  UPDATING = true; $("#updBar").textContent = "Updating…";
+  // A reload alone can reuse scripts from the browser's 10-minute cache, and then the button just comes back. Fetch this app's own files fresh first.
+  const fresh = [...document.querySelectorAll("script[src], link[rel=stylesheet]")].map(el => el.src || el.href).filter(u => new URL(u).origin === location.origin)
+    .map(u => fetch(u, { cache: "reload" }).then(r => r.ok).catch(() => false));
+  const got = await Promise.race([Promise.all(fresh).then(l => l.every(Boolean)), new Promise(r => setTimeout(() => r(false), 8000))]);
+  if (!got) { UPDATING = false; $("#updBar").textContent = "Weak signal: tap to try again"; return; }   // half new, half old files could break the app: stay as it is
+  location.reload();
+}
+
+// ── v19 TILES LOOK (switch: scotthub.look; v21: on unless this phone chose "classic") ──
 const K_LOOK = "scotthub.look", K_PLACE = "scotthub.place", K_WX = "scotthub.wx";
 const TL_NEEDS_MAX = 3, WX_EVERY_MS = 30 * 60000, WX_RETRY_MS = 5 * 60000;
 const WX_URL = "https://api.open-meteo.com/v1/forecast", GEO_URL = "https://geocoding-api.open-meteo.com/v1/search";
 const WX_OLD_MS = 3 * 3600000;       // alerts older than this are never shown as an all-clear
 let WX = loadJ(K_WX, null), WX_BUSY = false, WX_AGAIN = false, WX_TRIED = 0, PLACE_EDIT = false, PLACE_MSG = "", PLACE_TYPED = null;
-const tilesOn = () => store.get(K_LOOK) === "tiles";
+const tilesOn = () => store.get(K_LOOK) !== "classic";
 
 // Weather for a town typed once on this phone (same lookups as Day Hub: a ZIP goes to Zippopotam - exact;
 // a name to Open-Meteo's US search). Kept to 2 decimals (about a kilometre) - only ever sent to the weather services.
@@ -1313,6 +1341,7 @@ document.addEventListener("click", e => {
   const a = e.target.closest("[data-act]");
   if (a && a.dataset.act === "close") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; }
   if (a && a.dataset.act === "refresh") { $("#fresh").textContent = "refreshing…"; load(); }
+  if (a && a.dataset.act === "update") applyUpdate();     // v21
   if (a && a.dataset.act === "needs-more") { NEEDS_ALL = !NEEDS_ALL; renderNeeds(); }
   if (a && (a.dataset.act === "look-tiles" || a.dataset.act === "look-classic")) setLook(a.dataset.act.slice(5));    // v19
   if (a && a.dataset.act === "place-edit") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; PLACE_EDIT = true; PLACE_MSG = ""; PLACE_TYPED = null; renderTlHero(); }

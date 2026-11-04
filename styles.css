@@ -169,3 +169,7 @@ body.tl .needs li.more { padding: 6px 12px; font-size: 13px; }
 @media (max-width: 559px) { .tl-t:last-child:nth-child(odd) { grid-column: span 2; } }
 @media (min-width: 560px) { .tl-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .tl-place .tl-cancel { background: var(--tl-pill); border: 1px solid var(--line); color: inherit; }
+
+/* v21 Update ready: top of the front screen, both looks */
+.upd-bar { display: block; width: 100%; min-height: 48px; margin: 0 0 12px; padding: 10px 14px; border: 0; border-radius: 12px;
+  background: linear-gradient(90deg, #15803d, #22c55e, #15803d); color: #fff; font: inherit; font-weight: 800; text-align: center; cursor: pointer; }

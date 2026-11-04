@@ -22,7 +22,8 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- v19 TILES LOOK (Scott 11/01): shown only when this phone's look is "tiles" (off by default) -->
+  <script>try { if (localStorage.getItem("scotthub.look") !== "classic") document.body.classList.add("tl"); } catch (e) { /* private mode */ }</script><!-- v21: no flash of the old look while app.js loads -->
+  <!-- v19 TILES LOOK (Scott 11/01): shown unless this phone chose "classic" (the default since v21) -->
   <div id="tlTop" class="tl-top">
     <div class="tl-brand"><i></i>SCOTT HUB</div>
     <div class="tl-acts"><button class="tl-ico" data-act="refresh" aria-label="Refresh">🔄</button><button class="tl-pill" data-act="look-classic">Classic</button></div>
@@ -38,6 +39,7 @@
   </header>
 
   <main>
+    <button id="updBar" class="upd-bar hidden" data-act="update">✨ Update ready — tap to update</button>
     <section id="tlHero" class="tl-hero" aria-label="Now"></section>
 
     <section class="band" aria-label="What needs you">
