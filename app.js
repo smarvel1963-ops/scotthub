@@ -840,12 +840,13 @@ const SHEETS = {
   }],
   ads: ["📣 Ads & posting", () => {
     const a = dk().ads || {}, ac = obj(mh().ad_counts), tot = obj(ac.total);
-    let top = "";
+    let top = ac.error ? `<p class="note">⚠️ The ad count couldn't be read: ${esc(ac.error)}</p>` : "";
     if (ac.total) {
       const NAMES = { usemart: "UseMart", sbm: "Sites by Marvel", cmmg: "CMMG", hubs: "Hub apps", other: "Other" };
       top = sec("Ads posted · as of " + (isYmd(ac.read) ? dayName(ac.read) : "?") + (adCountOld() ? " · OLD" : ""));
       top += row("All", (tot.today || 0) + " today", (tot.week || 0) + " this week · " + (tot.month || 0) + " this month");
       top += Object.entries(obj(ac.by_business)).map(([k, r]) => row(NAMES[k] || k, (r.today || 0) + " today", (r.week || 0) + " this week · " + (r.month || 0) + " this month")).join("");
+      if (ac.bad_rows) top += `<p class="note">⚠️ ${esc(ac.bad_rows)} post${ac.bad_rows === 1 ? "" : "s"} in the list couldn't be read, so the count may be low.</p>`;
       top += `<p class="note">${ac.ahead || 0} scheduled ahead. Week and month are the last 7 and 30 days. Metricool's posts only, not ones you post by hand or CMMG's Discord, Telegram and X.${isYmd(ac.numbers_read) ? " Posts not scheduled in Metricool, like CMMG's Instagram, only show up to " + dayName(ac.numbers_read) + ", so a low CMMG count here doesn't mean it stopped." : ""}</p>`;
     }
     if (!a.sections || !a.sections.length) return top + `<p class="note">No ads report yet.</p>`;
