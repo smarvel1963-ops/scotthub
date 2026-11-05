@@ -56,6 +56,8 @@
  * v23 TALK TO CLAUDE + IDEA BOX (Scott 11/04: "i need to be able to communicate back and forth with you on scott hub" / "i have idea outside of
  * the office all the time" / "yes build both"): a tile that opens his Claude session (Claude Code's own Remote Control runs it on the PC; nothing here
  * can reach the PC), and a box for ideas. An idea is kept on this phone until the relay holds it, so no signal or a PC that's off loses nothing.
+ * v24 VIEWS (Scott 11/04: "need 3 squares to track view on my 3 sites"): UseMart, Sites by Marvel and the CMMG site, from UseMart's public visitor counter
+ * (usemart.net/api/visits). The phone reads it directly, so it keeps working while the PC is off. Totals only: the counter keeps no addresses or cookies.
  * "Classic" still goes back and stays. RELEASE RULE: every push bumps VERSION here, version.json and the cache name in sw.js.
  * v22 NEW LOOKS TILE (Scott 11/03: "i still dont see updates on my apps", on 1.58.2): the Day Hub + Cruise Hub new looks are off for customers and
  * only opened from a preview link. All Hubs share this address, so this tile sets each one's look key for THIS phone, with no link to tap.
@@ -113,6 +115,7 @@ function takePassFromLink() {
 async function load() {
   checkUpdate();                     // v21: open, resume, Refresh and the timer all look
   if (tilesOn()) loadWeather();      // v19: its own 30-min cache; never waits on the relay
+  loadViews();                       // v24: its own 5-minute wait; reads the sites' counter, never the relay
   const pass = store.get(K_PASS);
   if (!pass) { $("#setup").classList.remove("hidden"); return; }
   try {
@@ -237,6 +240,23 @@ function flushIdeas() {
       if (s && s.dataset.key === "claude" && !s.classList.contains("hidden")) openSheet("claude");
       renderTiles();
     });
+}
+// v24: views on the three sites. Last good numbers are kept, so no signal shows the old count with its time, never a blank.
+const K_VIEWS = "scotthub.views", VIEWS_EVERY = 5 * 60000, VIEW_URL = "https://usemart.net/api/visits?site=";
+const VIEW_SITES = [["usemart.net", "UseMart", "🛒"], ["sitesbymarvel.com", "Sites by Marvel", "🌐"], ["cmmgsports.com", "CMMG site", "🏆"]];
+let VIEWS_AT = 0;
+const viewData = () => obj(loadJ(K_VIEWS, {}));
+const nViews = v => Number(v || 0).toLocaleString("en-US");
+async function loadViews() {
+  if (Date.now() - VIEWS_AT < VIEWS_EVERY) return;
+  VIEWS_AT = Date.now();
+  const got = await Promise.all(VIEW_SITES.map(([s]) => fetch(VIEW_URL + encodeURIComponent(s)).then(r => r.ok ? r.json() : null).catch(() => null)));
+  const v = viewData();
+  got.forEach((j, i) => { if (j && j.on && j.today) v[VIEW_SITES[i][0]] = { today: j.today, month: j.month, total: j.total, at: new Date().toISOString() }; });
+  store.set(K_VIEWS, JSON.stringify(v));
+  renderTiles();
+  const s = $("#sheet");
+  if (s && s.dataset.key === "views" && !s.classList.contains("hidden")) openSheet("views");
 }
 const useCount = (u, key) => arr(u[key]).filter(t => t > Date.now() - USE_DAYS * 86400000).length;
 function orderBubbles() {
@@ -969,6 +989,19 @@ const SHEETS = {
     } else h += `<p class="note">Getting the forecast…</p>`;
     return h + `<p class="note">The town stays on this phone only. Forecast from Open-Meteo, alerts from weather.gov.</p>` + edit;
   }],
+  views: ["👀 Site views", () => {
+    const v = viewData();
+    let h = "";
+    VIEW_SITES.forEach(([s, name, icon]) => {
+      const d = v[s];
+      h += sec(icon + " " + name);
+      if (!d) { h += `<p class="note">No count yet.</p>`; return; }
+      h += row("Today", nViews(obj(d.today).views), nViews(obj(d.today).uniques) + " people");
+      h += row("This month", nViews(obj(d.month).views), nViews(obj(d.month).uniques) + " people");
+      h += row("All time", nViews(obj(d.total).views), nViews(obj(d.total).uniques) + " people");
+    });
+    return h + `<p class="note">The same person within 30 minutes counts as one view, and "people" counts each person once a day. Search robots aren't counted. Counting started when the counter was added.</p>`;
+  }],
   claude: ["🤖 Claude", () => {
     const off = pcStale(), dp = !!store.get(K_DEC), taken = new Set(arr(mh().ideas_taken));
     let h = `<a class="pay claudego" href="https://claude.ai/code" target="_blank" rel="noopener">Talk to Claude</a>`;
@@ -1026,7 +1059,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "23";
+const VERSION = "24";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1298,6 +1331,11 @@ function tileList() {
         : far ? "none saved in the next 12 months" : CAL && CAL.more ? "calendar list cut short - may be missing some" : "none in the next 7 days", bday ? "warn" : "");
   const ideaWait = ideasUnsent().length;     // v23
   add("claude", "🤖", "Claude", pcStale() ? "PC off" : "PC on", "", ideaWait ? ideaWait + " TO SEND" : "", ideaWait ? "old" : "", "talk to Claude · save an idea", "");
+  const vw = viewData();     // v24: one square per site
+  VIEW_SITES.forEach(([s, name, icon]) => {
+    const d = vw[s];
+    add("views", icon, name, d ? nViews(obj(d.today).views) : "-", d ? "views today" : "", "", "", d ? nViews(obj(d.month).views) + " this month · " + nViews(obj(d.total).views) + " all time" : "no count yet", "");
+  });
   if (ap().enabled) {
     const w = apWaiting(), ready = fx().enabled ? fxList().filter(f => f.status === "fix_ready").length : 0;
     add("approvals", "🗳️", "Approvals", String(w.length), "waiting", ready ? ready + " FIX READY" : w.length ? "YOUR CALL" : "", ready ? "pos" : w.length ? "old" : "",
