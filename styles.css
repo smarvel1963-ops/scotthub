@@ -178,3 +178,5 @@ body.tl .needs li.more { padding: 6px 12px; font-size: 13px; }
 .ideaform { display: grid; gap: 8px; margin: 6px 0 10px; }
 .ideaform textarea { width: 100%; box-sizing: border-box; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: inherit; font-size: 16px; resize: vertical; }
 .ideaform .pay { margin-top: 0; padding: 10px; font-size: 15px; }
+/* v26 new mail by inbox */
+.mailbox { border-bottom: 1px solid var(--line); padding: 8px 0; } .mailbox summary { cursor: pointer; font-weight: 700; font-size: 15px; } .mailbox summary small { color: var(--muted); font-weight: 400; margin-left: 6px; } .mailbox .row { padding-left: 4px; }

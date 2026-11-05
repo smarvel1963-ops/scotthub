@@ -60,6 +60,8 @@
  * (usemart.net/api/visits). The phone reads it directly, so it keeps working while the PC is off. Totals only: the counter keeps no addresses or cookies.
  * v25 AD COUNTS (Scott 11/04: "i like scott hub tracking amount of adds daily weekly monthly"): posts out today, this week and this month, in all and per business, from mh().ad_counts. "as of" shows
  * how fresh the list is, because Claude refreshes it off Metricool; older than 2 days says OLD rather than passing as today's count.
+ * v26 ALL NEW MAIL (Scott 11/04: "all email go through that hub as well and you still screen and file like in desktop"): step 1, the newest mail per inbox, sender + subject, from Marvel Desktop's
+ * scan, which still does the screening and filing. Look only: nothing here can touch mail yet.
  * "Classic" still goes back and stays. RELEASE RULE: every push bumps VERSION here, version.json and the cache name in sw.js.
  * v22 NEW LOOKS TILE (Scott 11/03: "i still dont see updates on my apps", on 1.58.2): the Day Hub + Cruise Hub new looks are off for customers and
  * only opened from a preview link. All Hubs share this address, so this tile sets each one's look key for THIS phone, with no link to tap.
@@ -863,7 +865,11 @@ const SHEETS = {
   email: ["📧 Email", () => {
     const em = dk().email || {};
     if (!em.inboxes) return `<p class="note">No email data yet.</p>`;
-    let h = sec("💼 Recruiters & job offers · last " + em.days + " days");
+    let h = sec("New mail by inbox");
+    h += (em.inboxes || []).filter(i => arr(i.latest).length).map(i => `<details class="mailbox"><summary>${esc(i.inbox)} <small>${esc(i.unread ?? 0)} unread</small></summary>` +
+      arr(i.latest).map(x => row(x.subject || "(no subject)", x.unread ? "new" : "", (isYmd(x.date) ? dayName(x.date) + " · " : "") + (x.from || "") + (x.kind ? " · " + String(x.kind).toLowerCase() : ""))).join("") + `</details>`).join("") || `<p class="note">Shows after the next mail scan.</p>`;
+    h += `<p class="note">The newest 10 per inbox, from the PC's mail scan. To see an email in full, open that inbox. Claude still screens and files on the PC.</p>`;
+    h += sec("💼 Recruiters & job offers · last " + em.days + " days");
     h += (em.recruiters || []).map(r => row(r.from, dayName(r.date), r.subject + " · " + r.inbox + (r.archived ? " · archived" : ""))).join("") || `<p class="note">None found.</p>`;
     h += `<p class="note">${em.job_alerts || 0} job-alert emails (LinkedIn/Indeed alerts) in the same window - counted, not listed. Archived mail is still in All Mail.</p>`;
     h += sec("Important mail · " + (em.important_count || 0));
@@ -1071,7 +1077,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "25";
+const VERSION = "26";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
