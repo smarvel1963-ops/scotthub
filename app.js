@@ -53,6 +53,9 @@
  * anniversary / 🎂 in the relay's 7 days plus (relay v7) 12 months of Contacts birthdays and his own yearly ones.
  * v21 UPDATE READY + NEW LOOK ON (Scott 11/03: "scott hub never got the down load for amazing new look we built" + "show on
  * front screen update ready"): an update now says so at the top of the front screen, and the tiles are the default.
+ * v23 TALK TO CLAUDE + IDEA BOX (Scott 11/04: "i need to be able to communicate back and forth with you on scott hub" / "i have idea outside of
+ * the office all the time" / "yes build both"): a tile that opens his Claude session (Claude Code's own Remote Control runs it on the PC; nothing here
+ * can reach the PC), and a box for ideas. An idea is kept on this phone until the relay holds it, so no signal or a PC that's off loses nothing.
  * "Classic" still goes back and stays. RELEASE RULE: every push bumps VERSION here, version.json and the cache name in sw.js.
  * v22 NEW LOOKS TILE (Scott 11/03: "i still dont see updates on my apps", on 1.58.2): the Day Hub + Cruise Hub new looks are off for customers and
  * only opened from a preview link. All Hubs share this address, so this tile sets each one's look key for THIS phone, with no link to tap.
@@ -118,6 +121,7 @@ async function load() {
     if (!j.ok) throw new Error(j.error || "relay said no");
     DATA = j.parts; CAL = j.calendar || null; RELAY_TAPS = j.decisions || []; FETCHED_AT = new Date().toISOString(); LAST_ERR = null;
     flushLearn();             // v18: anything queued while offline / before relay v6
+    flushIdeas();             // v23: ideas waiting on this phone
     store.set(K_LAST, JSON.stringify({ parts: DATA, cal: CAL, taps: RELAY_TAPS, at: FETCHED_AT }));
   } catch (e) {
     LAST_ERR = String(e.message || e);
@@ -197,6 +201,42 @@ function flushLearn() {
     })
     .catch(() => {})
     .then(() => { LEARN_SENDING = false; });
+}
+// v23: the idea box. Kept here until the relay says it holds it; resent on every refresh. mh().ideas_taken = the ids the PC has filed.
+const K_IDEAS = "scotthub.ideas", K_IDEADRAFT = "scotthub.ideadraft", IDEA_TEXT = 2000;
+let IDEA_SENDING = false;
+const ideaList = () => arr(loadJ(K_IDEAS, [])).filter(i => i && i.id);
+const ideasUnsent = () => ideaList().filter(i => !i.sent);
+function saveIdea(text) {
+  const t = cutChars(String(text || "").trim(), IDEA_TEXT);
+  if (!t) return false;
+  const rows = ideaList();
+  rows.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8), text: t, at: new Date().toISOString(), sent: false });
+  // the list keeps 30, but an idea not yet sent is never dropped
+  while (rows.length > 30) { const k = rows.findIndex(i => i.sent); if (k < 0) break; rows.splice(k, 1); }
+  store.set(K_IDEAS, JSON.stringify(rows));
+  store.set(K_IDEADRAFT, "");
+  flushIdeas();
+  return true;
+}
+function flushIdeas() {
+  const dp = store.get(K_DEC), batch = ideasUnsent().slice(0, 10);
+  if (!dp || !batch.length || IDEA_SENDING) return;
+  IDEA_SENDING = true;
+  fetch(RELAY, { method: "POST", body: JSON.stringify({ task: "idea", dpass: dp, ideas: batch.map(i => ({ id: i.id, text: i.text, at: i.at })) }) })
+    .then(r => r.json())
+    .then(j => {
+      if (!j || !j.ok || !Array.isArray(j.ids)) return;     // an older relay says no: they wait here
+      const got = new Set(j.ids);
+      store.set(K_IDEAS, JSON.stringify(ideaList().map(i => got.has(i.id) ? { ...i, sent: true } : i)));
+    })
+    .catch(() => {})
+    .then(() => {
+      IDEA_SENDING = false;
+      const s = $("#sheet");
+      if (s && s.dataset.key === "claude" && !s.classList.contains("hidden")) openSheet("claude");
+      renderTiles();
+    });
 }
 const useCount = (u, key) => arr(u[key]).filter(t => t > Date.now() - USE_DAYS * 86400000).length;
 function orderBubbles() {
@@ -929,6 +969,18 @@ const SHEETS = {
     } else h += `<p class="note">Getting the forecast…</p>`;
     return h + `<p class="note">The town stays on this phone only. Forecast from Open-Meteo, alerts from weather.gov.</p>` + edit;
   }],
+  claude: ["🤖 Claude", () => {
+    const off = pcStale(), dp = !!store.get(K_DEC), taken = new Set(arr(mh().ideas_taken));
+    let h = `<a class="pay claudego" href="https://claude.ai/code" target="_blank" rel="noopener">Talk to Claude</a>`;
+    h += `<p class="note">${off ? "Your PC looks off or quiet" + (mh().generated_at ? " (last report " + esc(ago(ageMin(mh().generated_at))) + ")" : "") + ". Claude runs on the PC, so it can't answer until the PC is back. Save your idea below." : "Your PC is on. Your session shows in the list once /rc is running on the PC."}</p>`;
+    h += sec("Save an idea");
+    h += `<form data-ideaform class="ideaform"><textarea name="idea" rows="4" maxlength="${IDEA_TEXT}" placeholder="Type your idea" aria-label="Your idea">${esc(store.get(K_IDEADRAFT) || "")}</textarea><button type="submit" class="pay">Save idea</button></form>`;
+    if (!dp) h += `<p class="note">This phone doesn't have your approvals link yet, so ideas stay here until it does.</p>`;
+    const rows = ideaList().slice().reverse();
+    if (rows.length) h += sec("Your ideas");
+    h += rows.map(i => row(i.text, taken.has(i.id) ? "✓ On your PC" : i.sent ? "Saved online" : "Waiting to send", new Date(i.at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/Chicago" }))).join("");
+    return h;
+  }],
   hublooks: ["✨ New looks", () => {
     let h = `<p class="note">Turns a Hub's new look on or off for this phone only. Customers still see the old look.</p>`;
     HUB_LOOKS.forEach(([id, name]) => {
@@ -974,7 +1026,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "22";
+const VERSION = "23";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1244,6 +1296,8 @@ function tileList() {
         : CAL && CAL.birthdays_error ? "birthdays can't be read"
         : far && CAL.birthdays_from && CAL.birthdays_from.contacts === false ? "Contacts birthdays not found"
         : far ? "none saved in the next 12 months" : CAL && CAL.more ? "calendar list cut short - may be missing some" : "none in the next 7 days", bday ? "warn" : "");
+  const ideaWait = ideasUnsent().length;     // v23
+  add("claude", "🤖", "Claude", pcStale() ? "PC off" : "PC on", "", ideaWait ? ideaWait + " TO SEND" : "", ideaWait ? "old" : "", "talk to Claude · save an idea", "");
   if (ap().enabled) {
     const w = apWaiting(), ready = fx().enabled ? fxList().filter(f => f.status === "fix_ready").length : 0;
     add("approvals", "🗳️", "Approvals", String(w.length), "waiting", ready ? ready + " FIX READY" : w.length ? "YOUR CALL" : "", ready ? "pos" : w.length ? "old" : "",
@@ -1374,6 +1428,15 @@ document.addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target.dataset && (e.target.dataset.open || e.target.dataset.act)) e.target.click();
 });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+document.addEventListener("input", e => {           // v23: a half-typed idea survives a refresh or a closed app
+  if (e.target.closest && e.target.closest("[data-ideaform]")) store.set(K_IDEADRAFT, e.target.value);
+});
+document.addEventListener("submit", e => {          // v23: the idea box
+  const f = e.target.closest("[data-ideaform]");
+  if (!f) return;
+  e.preventDefault();
+  if (saveIdea(f.elements.idea.value)) { openSheet("claude"); renderTiles(); }
+});
 document.addEventListener("submit", e => {          // v19: the town for weather
   const f = e.target.closest("[data-placeform]");
   if (!f) return;

@@ -47,6 +47,10 @@
  * getAllCalendars() leaves it out - plus his own calendar's events titled birthday / bday / anniversary / 🎂, and
  * birthdays_from = which of the two were read. Cached 1 hour. Nothing else changes; an older phone ignores the fields.
  *
+ * v8 (Scott 11/04: "i have idea outside of the office all the time" / "yes build both"): the idea box. The phone saves typed ideas
+ * here even while the PC is off (decide pass, same as "learn"); the PC takes them on its next "pull". Text only, cut to IDEA_TEXT. Nothing
+ * here acts on an idea, and no phone message ever runs anything on the PC.
+ *
  * Tasks (POST, body JSON):
  *   {task:"put",    key, part:"masterhub"|"desktop", data:{...}}             PC
  *   {task:"put",    key:<server key>, part:"server", data:{...}}             server (v4)
@@ -62,6 +66,7 @@
  *        field checked and cut to size (key / text 120 characters), one stored call <= LEARN_BYTES, all
  *        stored calls <= LEARN_TOTAL characters (oldest dropped) and the newest LEARN_KEEP. Reply
  *        {ok, stored, taken, ids}: ids = the phone ids used up, which the phone then removes. PC: "pull".
+ *   {task:"idea",   dpass, ideas:[{id, text, at}]}   phone (v8). Reply {ok, ids}: the ids it now holds, which the phone marks sent. PC: "pull".
  * Storage: each part as compact JSON split into <=8,000-char chunks
  * (Script Properties cap one value at ~9 KB), plus the time it arrived.
  * Only the newest copy of each part is kept. Taps: one property each (dec_<seq>), the
@@ -80,6 +85,10 @@ const LEARN_BYTES = 8000;          // one stored call, UTF-8 bytes (one Script P
 const LEARN_TOTAL = 60000;         // all stored learn calls together, characters (~180 KB worst case in bytes) - the 500 KB store is shared with the parts + taps
 const LEARN_TEXT = 120;            // key / text cut to this many characters (whole characters, never half an emoji)
 const LEARN_HOWS = ["snooze", "done", "unhide", "open", "view"];
+const IDEA_KEEP = 100;             // v8: newest ideas kept for the PC to take (the PC keeps its own copy for good)
+const IDEA_MAX = 10;               // one call
+const IDEA_TEXT = 2000;            // characters; 2,000 is at most ~8 KB, inside one Script Property
+const IDEA_TOTAL = 60000;          // all stored ideas together, characters - the 500 KB store is shared
 function cutChars(s, n) { return Array.from(String(s || "")).slice(0, n).join(""); }
 
 function doPost(e) {
@@ -111,11 +120,12 @@ function doPost(e) {
 
     if (req.task === "pull") {
       if (!same(req.key, cfg.write)) return out({ error: "wrong write key" });
-      return out({ ok: true, decisions: listDecisions(P, DEC_KEEP), learn: listLearn(P, LEARN_KEEP) });
+      return out({ ok: true, decisions: listDecisions(P, DEC_KEEP), learn: listLearn(P, LEARN_KEEP), ideas: listIdeas(P) });
     }
 
     if (req.task === "decide") return out(decide(P, cfg, req));
     if (req.task === "learn") return out(learn(P, cfg, req));
+    if (req.task === "idea") return out(idea(P, cfg, req));
 
     if (!same(req.pass, cfg.read)) return out({ error: "wrong passphrase" });
     if (req.task === "ping") return out({ ok: true, app: "scotthub-relay", decide: !!cfg.decide, server: !!cfg.server, usemart: !!cfg.usemart });
@@ -282,6 +292,47 @@ function learn(P, cfg, req) {
     while (total > LEARN_TOTAL && kept.length > 1) { const k = kept.shift(); P.deleteProperty(k[0]); total -= k[1]; }
     return { ok: true, stored: rec.events.length, taken: taken, ids: ids };
   } finally { lock.releaseLock(); }
+}
+
+// v8: the idea box. Junk (no id, no words) is used up so the phone stops resending it; a re-sent id is harmless, the PC dedupes by id.
+function idea(P, cfg, req) {
+  if (!cfg.decide) return { error: "approvals aren't switched on in the relay yet" };
+  if (same(cfg.decide, cfg.read) || same(cfg.decide, cfg.write)) return { error: "decide must be its own secret - fix SCOTT_HUB" };
+  if (!same(req.dpass, cfg.decide)) return { error: "wrong decide pass" };
+  const rows = Array.isArray(req.ideas) ? req.ideas.slice(0, IDEA_MAX) : [], ids = [];
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    let n = Number(P.getProperty("idea_n") || 0);
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] && typeof rows[i] === "object" ? rows[i] : {};
+      const id = /^[a-z0-9]{1,24}$/.test(String(r.id || "")) ? String(r.id) : "";
+      const text = cutChars(String(r.text || "").trim(), IDEA_TEXT);
+      if (id) ids.push(id);
+      if (!id || !text) continue;
+      const t = Date.parse(String(r.at || ""));
+      n++;
+      const props = { idea_n: String(n) };
+      props["idea_" + n] = JSON.stringify({ id: id, text: text, at: isNaN(t) ? "" : new Date(t).toISOString(), relay_at: new Date().toISOString() });
+      P.setProperties(props);
+      if (n > IDEA_KEEP) P.deleteProperty("idea_" + (n - IDEA_KEEP));
+    }
+    const all = P.getProperties(), kept = [];
+    let total = 0;
+    for (let i = Math.max(1, n - IDEA_KEEP + 1); i <= n; i++) {
+      const v = all["idea_" + i];
+      if (v) { kept.push(["idea_" + i, v.length]); total += v.length; }
+    }
+    while (total > IDEA_TOTAL && kept.length > 1) { const k = kept.shift(); P.deleteProperty(k[0]); total -= k[1]; }
+    return { ok: true, ids: ids };
+  } finally { lock.releaseLock(); }
+}
+function listIdeas(P) {
+  const all = P.getProperties(), n = Number(all.idea_n || 0), rows = [];
+  for (let i = Math.max(1, n - IDEA_KEEP + 1); i <= n; i++) {
+    try { if (all["idea_" + i]) rows.push(JSON.parse(all["idea_" + i])); } catch (err) { /* skip a torn one */ }
+  }
+  return rows;
 }
 
 // The newest `max` learn calls, oldest first.
