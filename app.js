@@ -58,6 +58,8 @@
  * can reach the PC), and a box for ideas. An idea is kept on this phone until the relay holds it, so no signal or a PC that's off loses nothing.
  * v24 VIEWS (Scott 11/04: "need 3 squares to track view on my 3 sites"): UseMart, Sites by Marvel and the CMMG site, from UseMart's public visitor counter
  * (usemart.net/api/visits). The phone reads it directly, so it keeps working while the PC is off. Totals only: the counter keeps no addresses or cookies.
+ * v25 AD COUNTS (Scott 11/04: "i like scott hub tracking amount of adds daily weekly monthly"): posts out today, this week and this month, in all and per business, from mh().ad_counts. "as of" shows
+ * how fresh the list is, because Claude refreshes it off Metricool; older than 2 days says OLD rather than passing as today's count.
  * "Classic" still goes back and stays. RELEASE RULE: every push bumps VERSION here, version.json and the cache name in sw.js.
  * v22 NEW LOOKS TILE (Scott 11/03: "i still dont see updates on my apps", on 1.58.2): the Day Hub + Cruise Hub new looks are off for customers and
  * only opened from a preview link. All Hubs share this address, so this tile sets each one's look key for THIS phone, with no link to tap.
@@ -258,6 +260,7 @@ async function loadViews() {
   const s = $("#sheet");
   if (s && s.dataset.key === "views" && !s.classList.contains("hidden")) openSheet("views");
 }
+const adCountOld = () => { const r = obj(mh().ad_counts).read; return !isYmd(r) || r < addDays(todayCT(), -2); };   // v25
 const useCount = (u, key) => arr(u[key]).filter(t => t > Date.now() - USE_DAYS * 86400000).length;
 function orderBubbles() {
   const nav = document.querySelector(".bubbles");
@@ -836,10 +839,18 @@ const SHEETS = {
     return h;
   }],
   ads: ["📣 Ads & posting", () => {
-    const a = dk().ads || {};
-    if (!a.sections || !a.sections.length) return `<p class="note">No ads report yet.</p>`;
+    const a = dk().ads || {}, ac = obj(mh().ad_counts), tot = obj(ac.total);
+    let top = "";
+    if (ac.total) {
+      const NAMES = { usemart: "UseMart", sbm: "Sites by Marvel", cmmg: "CMMG", hubs: "Hub apps", other: "Other" };
+      top = sec("Ads posted · as of " + (isYmd(ac.read) ? dayName(ac.read) : "?") + (adCountOld() ? " · OLD" : ""));
+      top += row("All", (tot.today || 0) + " today", (tot.week || 0) + " this week · " + (tot.month || 0) + " this month");
+      top += Object.entries(obj(ac.by_business)).map(([k, r]) => row(NAMES[k] || k, (r.today || 0) + " today", (r.week || 0) + " this week · " + (r.month || 0) + " this month")).join("");
+      top += `<p class="note">${ac.ahead || 0} scheduled ahead. Week and month are the last 7 and 30 days. Metricool's posts only, not ones you post by hand or CMMG's Discord, Telegram and X.${isYmd(ac.numbers_read) ? " Posts not scheduled in Metricool, like CMMG's Instagram, only show up to " + dayName(ac.numbers_read) + ", so a low CMMG count here doesn't mean it stopped." : ""}</p>`;
+    }
+    if (!a.sections || !a.sections.length) return top + `<p class="note">No ads report yet.</p>`;
     const ST = { OK: "✅", FAILED: "❌", LATE: "⚠️", UNKNOWN: "❔" };
-    let h = `<p class="note">Marvel Desktop's morning report for ${esc(a.report_day ? dayName(a.report_day) : "?")} (built ${esc(a.built_at ? t12(a.built_at) : "?")}) - it grades yesterday's posting.</p>`;
+    let h = top + `<p class="note">Marvel Desktop's morning report for ${esc(a.report_day ? dayName(a.report_day) : "?")} (built ${esc(a.built_at ? t12(a.built_at) : "?")}) - it grades yesterday's posting.</p>`;
     a.sections.forEach(s => {
       h += sec(s.title);
       h += s.rows.map(r => row((ST[r.state] || "") + " " + r.task, r.state === "OK" ? "" : r.state,
@@ -1059,7 +1070,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "24";
+const VERSION = "25";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1356,6 +1367,8 @@ function tileList() {
       (em.recruiter_count || 0) + " recruiter" + (em.recruiter_count === 1 ? "" : "s") + " · " + (em.job_alerts || 0) + " job alerts");
   const adRows = [].concat(...arr((d.ads || {}).sections).filter(s => /^ADS/i.test(s.title)).map(s => arr(s.rows))), adBad = adRows.filter(r => r.state === "FAILED").length;
   add("ads", "📣", "Ads", adRows.length ? (adRows.length - adBad) + "/" + adRows.length : "-", "ran", adRows.length ? adBad ? adBad + " FAILED" : "ALL RAN" : "", adBad ? "neg" : "pos", "yesterday's posting");
+  const adT = obj(obj(m.ad_counts).total);    // v25
+  if (obj(m.ad_counts).total) add("ads", "📊", "Ads posted", String(adT.today || 0), "today", adCountOld() ? "OLD" : "", adCountOld() ? "old" : "", (adT.week || 0) + " this week · " + (adT.month || 0) + " this month");
   const bz = d.business || {}, fn = bz.funnel || {}, dc = obj(obj(bz.followers).discord).count, bk = arr(bz.books)[0];
   const sl = arr(obj(em.sales).rows).filter(r => r.date >= addDays(todayCT(), -2)).length;
   add("business", "📈", "Business", String(fn.whop_active ?? "-"), "Whop", sl ? sl + " NEW SALE" + (sl > 1 ? "S" : "") : "", sl ? "pos" : "",
