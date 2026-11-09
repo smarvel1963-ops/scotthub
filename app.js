@@ -840,6 +840,14 @@ const SHEETS = {
     });
     return h;
   }],
+  // v28 PROJECTS (Scott 11/08: "man and run the instagram project with updates to scott hub same for app testing and all app projects"): filled by the daily project check on the PC
+  projects: ["🚀 Projects", () => {
+    const P = obj(mh().projects), G = arr(P.groups);
+    if (!G.length) return `<p class="note">${P.error ? "⚠️ The project list couldn't be read." : "No project report yet."}</p>`;
+    const old = isYmd(P.updated) && (Date.now() - new Date(P.updated + "T12:00:00").getTime()) > 3 * 864e5;
+    return (P.updated ? `<p class="note">Checked ${isYmd(P.updated) ? esc(dayName(P.updated)) : "?"}${old ? " · OLD: the daily check hasn't run" : ""}</p>` : "")
+      + G.map(g => sec(g.title || "") + arr(g.rows).map(r => row(r[0] || "", r[1] || "", r[2] || "")).join("") + (g.note ? `<p class="note">${esc(g.note)}</p>` : "")).join("");
+  }],
   ads: ["📣 Ads & posting", () => {
     const a = dk().ads || {}, ac = obj(mh().ad_counts), tot = obj(ac.total);
     let top = ac.error ? `<p class="note">⚠️ The ad count couldn't be read: ${esc(ac.error)}</p>` : "";
@@ -1077,7 +1085,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "26";
+const VERSION = "28";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1386,6 +1394,7 @@ function tileList() {
   const hl = m.hot_list || {}, first = arr(hl.top)[0];
   add("todo", "✅", "To-do", String(hl.open_total ?? "-"), "open", "", "", first ? String(first.title).replace(/^[^A-Za-z0-9]+/u, "").replace(/\s*\(you.*$/i, "") : "");
   add("hublooks", "✨", "New looks", HUB_LOOKS.filter(h => store.get(h[0] + ".look") === "tiles").length + " of " + HUB_LOOKS.length, "on", "", "", "in my other Hubs");
+  { const P = obj(mh().projects), H = obj(P.headline); if (arr(P.groups).length) add("projects", "🚀", "Projects", H.value || "Open", H.unit || "", "", "", H.sub || "Instagram · app testing · apps"); }   // v28
   return T;
 }
 const TL_FIXED = 6;      // Today, Games, Till payday, Next up, Systems, Birthdays
