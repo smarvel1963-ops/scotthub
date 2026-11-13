@@ -62,6 +62,11 @@
  * how fresh the list is, because Claude refreshes it off Metricool; older than 2 days says OLD rather than passing as today's count.
  * v26 ALL NEW MAIL (Scott 11/04: "all email go through that hub as well and you still screen and file like in desktop"): step 1, the newest mail per inbox, sender + subject, from Marvel Desktop's
  * scan, which still does the screening and filing. Look only: nothing here can touch mail yet.
+ * v27 ARCHIVE / TRASH / UNDO on one email (shown while the PC sends mh().mail_actions_on = true). A tap waits on this phone until the relay holds it; before that Undo just cancels, after it Undo sends the mail back to the inbox.
+ * The PC carries it out with the same moves as its cleanup. Nothing is ever deleted for good from here.
+ * v29 USEMART SITE LOAD (Scott 11/12 "finish what you can"; UseMart N12): the usemart part's surge numbers (this server, last 5 min) on the
+ * UseMart support screen, plus a red card on the home band when the site is under strain (same limits as the server's alert email).
+ * v27 mail buttons ship here too: they show only when the PC says mail_actions_on, and need relay v9 deployed.
  * "Classic" still goes back and stays. RELEASE RULE: every push bumps VERSION here, version.json and the cache name in sw.js.
  * v22 NEW LOOKS TILE (Scott 11/03: "i still dont see updates on my apps", on 1.58.2): the Day Hub + Cruise Hub new looks are off for customers and
  * only opened from a preview link. All Hubs share this address, so this tile sets each one's look key for THIS phone, with no link to tap.
@@ -129,6 +134,7 @@ async function load() {
     DATA = j.parts; CAL = j.calendar || null; RELAY_TAPS = j.decisions || []; FETCHED_AT = new Date().toISOString(); LAST_ERR = null;
     flushLearn();             // v18: anything queued while offline / before relay v6
     flushIdeas();             // v23: ideas waiting on this phone
+    flushMail();              // v27: mail taps waiting on this phone
     store.set(K_LAST, JSON.stringify({ parts: DATA, cal: CAL, taps: RELAY_TAPS, at: FETCHED_AT }));
   } catch (e) {
     LAST_ERR = String(e.message || e);
@@ -158,6 +164,12 @@ const um = () => obj(DATA && DATA.usemart && DATA.usemart.data);
 const umAge = () => ageMin(DATA && DATA.usemart && DATA.usemart.received_at);
 const umItems = () => arr(um().newest).filter(x => x && typeof x === "object" && /^[0-9a-f-]{36}$/i.test(String(x.id || "")));
 const umHave = () => !!(DATA && DATA.usemart && DATA.usemart.data);
+// v29: site load from the UseMart server (coremode.ts SURGE: p95 over 2 s or 5xx over 5%, only once 50+ requests in the window)
+const umSurge = () => { const g = um().surge; return g && typeof g === "object" && Number.isFinite(Number(g.requests)) ? g : null; };
+const umStrain = g => { const why = []; if (!g || Number(g.requests) < 50) return why;
+  if (Number(g.p95_ms) > 2000) why.push("slow: 95% of answers took up to " + (Number(g.p95_ms) / 1000).toFixed(1) + " s");
+  if (Number(g.error_rate) > 0.05) why.push("errors: " + Number(g.errors_5xx) + " of " + Number(g.requests) + " answers failed");
+  return why; };
 
 // v15: finance from the desktop part (absent until the desktop switch FINANCE_ENABLED is on). Words shown escaped.
 const fin = () => obj(dk().finance);
@@ -263,6 +275,61 @@ async function loadViews() {
   if (s && s.dataset.key === "views" && !s.classList.contains("hidden")) openSheet("views");
 }
 const adCountOld = () => { const r = obj(mh().ad_counts).read; return !isYmd(r) || r < addDays(todayCT(), -2); };   // v25
+// v27: Archive / Trash / Undo on one email
+const K_MAILQ = "scotthub.mailq";
+let MAIL_SENDING = false, MAIL_OPEN = {};
+const mailQ = () => arr(loadJ(K_MAILQ, [])).filter(q => q && q.id);
+const mailState = id => obj(obj(dk().email).mail_done)[id] || null;
+function mailTap(act, key, undoes) {
+  const q = mailQ();
+  if (act === "undo") {
+    const first = q.find(x => x.id === undoes);
+    if (first && !first.tried) { store.set(K_MAILQ, JSON.stringify(q.filter(x => x.id !== undoes))); return; }   // never handed to the network: just cancel it. Once tried, the relay may hold it, so a real undo goes.
+  }
+  q.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8), key, act, undoes: undoes || "", at: new Date().toISOString(), sent: false });
+  store.set(K_MAILQ, JSON.stringify(q.slice(-60)));
+  flushMail();
+}
+function flushMail() {
+  const dp = store.get(K_DEC), batch = mailQ().filter(x => !x.sent).slice(0, 10);
+  if (!dp || !batch.length || MAIL_SENDING) return;
+  MAIL_SENDING = true;
+  const trying = new Set(batch.map(x => x.id));
+  store.set(K_MAILQ, JSON.stringify(mailQ().map(x => trying.has(x.id) ? { ...x, tried: true } : x)));
+  fetch(RELAY, { method: "POST", body: JSON.stringify({ task: "mailact", dpass: dp, actions: batch.map(({ id, key, act, undoes, at }) => ({ id, key, act, undoes, at })) }) })
+    .then(r => r.json())
+    .then(j => {
+      if (j && j.ok && Array.isArray(j.ids)) { const got = new Set(j.ids); store.set(K_MAILQ, JSON.stringify(mailQ().map(x => got.has(x.id) ? { ...x, sent: true } : x))); }
+      else if (j) store.set(K_MAILQ, JSON.stringify(mailQ().map(x => trying.has(x.id) ? { ...x, tried: false } : x)));     // the relay answered no, so it holds nothing: Undo can just cancel
+    })
+    .catch(() => {})
+    .then(() => { MAIL_SENDING = false; const s = $("#sheet"); if (s && s.dataset.key === "email" && !s.classList.contains("hidden")) mailRedraw(); });
+}
+function mailRedraw() {   // keep the inboxes he has open
+  MAIL_OPEN = {}; document.querySelectorAll("details.mailbox").forEach((d, i) => { if (d.open) MAIL_OPEN[i] = true; });
+  openSheet("email");
+  document.querySelectorAll("details.mailbox").forEach((d, i) => { if (MAIL_OPEN[i]) d.open = true; });
+}
+const MAIL_WORD = { archive: "Archived", trash: "In Trash", undo: "Back in inbox" };
+const mailWord = (act, s) => s === "done" ? MAIL_WORD[act] : s === "not_found" ? "Couldn't find it, it may have moved" : s === "too_old" ? "Too old, tap again" : s === "error" ? "Couldn't be sure it worked" : { archive: "Archive", trash: "Trash", undo: "Back to inbox" }[act] + ": waiting for the PC";
+// mail he already acted on: a scan drops it from the newest 10, and Undo mustn't go with it
+function mailRecent() {
+  const done = obj(obj(dk().email).mail_done), undone = new Set(Object.values(done).map(r => r.undoes).filter(Boolean));
+  const rows = Object.entries(done).reverse().filter(([id, r]) => r.act !== "undo" && r.subject).slice(0, 10);
+  if (!rows.length) return "";
+  return sec("Recently moved") + rows.map(([id, r]) => row(r.subject, "", (r.from || "") + " · " + (undone.has(id) ? "Undo sent" : mailWord(r.act, r.state))) +
+    (!undone.has(id) && r.state !== "not_found" && r.state !== "too_old" ? `<div class="mailact"><span class="chip" role="button" tabindex="0" data-act="mailact" data-do="undo" data-key="${esc(r.key)}" data-undoes="${esc(id)}">Undo</span></div>` : "")).join("");
+}
+function mailBtns(x) {
+  if (!mh().mail_actions_on || !x.key || !store.get(K_DEC)) return "";
+  const q = mailQ().filter(y => y.key === x.key), last = q[q.length - 1];
+  const st0 = last ? mailState(last.id) : null, s0 = st0 ? st0.state : "", old = last && !st0 && Date.now() - new Date(last.at).getTime() > 48 * 3600000;
+  const retry = !last || old || s0 === "not_found" || s0 === "too_old" || (last.act === "undo" && s0 === "done");
+  if (retry) return `${last && !(last.act === "undo" && s0 === "done") ? `<small class="mailnote">${esc(mailWord(last.act, old ? "too_old" : s0))}</small>` : ""}<div class="mailact"><span class="chip" role="button" tabindex="0" data-act="mailact" data-do="archive" data-key="${esc(x.key)}">Archive</span> <span class="chip" role="button" tabindex="0" data-act="mailact" data-do="trash" data-key="${esc(x.key)}">Trash</span></div>`;
+  const s = s0, word = mailWord(last.act, s);
+  const canUndo = last.act !== "undo";     // after an error the mail may have moved, so Undo stays
+  return `<div class="mailact"><small>${esc(word)}</small>${canUndo ? ` <span class="chip" role="button" tabindex="0" data-act="mailact" data-do="undo" data-key="${esc(x.key)}" data-undoes="${esc(last.id)}">Undo</span>` : ""}</div>`;
+}
 const useCount = (u, key) => arr(u[key]).filter(t => t > Date.now() - USE_DAYS * 86400000).length;
 function orderBubbles() {
   const nav = document.querySelector(".bubbles");
@@ -486,6 +553,8 @@ function needs() {
     if (age != null && age > UM_STALE_MIN) add("warn", "UseMart support card is stale - last update " + ago(age), "The UseMart server sends it every 5 min while the switch is on.", "usemart");
     else if (n) add(late ? "bad" : "warn", "🛒 " + n + " UseMart support item" + (n > 1 ? "s" : "") + " waiting on you" + (late ? " · " + late + " over 24 h" : ""),
                     umItems().slice(0, 2).map(x => x.name + ": " + x.topic).join(" · ") + " · tap to reply", "usemart");
+    const g = umSurge(), why = umStrain(g);   // v29
+    if (!(age != null && age > UM_STALE_MIN) && why.length) add("bad", "🛒 UseMart is under strain", why.join(" · ") + (g.core_mode ? " · core mode is ON" : " · tap for numbers"), "usemart");
   }
   const qs = ap().enabled ? apWaiting() : [];
   if (qs.length) add("warn", "🗳️ " + qs.length + " question" + (qs.length > 1 ? "s" : "") + " from Claude", qs.slice(0, 2).map(q => q.id + " " + q.ask).join(" · "), "approvals");
@@ -875,7 +944,8 @@ const SHEETS = {
     if (!em.inboxes) return `<p class="note">No email data yet.</p>`;
     let h = sec("New mail by inbox");
     h += (em.inboxes || []).filter(i => arr(i.latest).length).map(i => `<details class="mailbox"><summary>${esc(i.inbox)} <small>${esc(i.unread ?? 0)} unread</small></summary>` +
-      arr(i.latest).map(x => row(x.subject || "(no subject)", x.unread ? "new" : "", (isYmd(x.date) ? dayName(x.date) + " · " : "") + (x.from || "") + (x.kind ? " · " + String(x.kind).toLowerCase() : ""))).join("") + `</details>`).join("") || `<p class="note">Shows after the next mail scan.</p>`;
+      arr(i.latest).map(x => row(x.subject || "(no subject)", x.unread ? "new" : "", (isYmd(x.date) ? dayName(x.date) + " · " : "") + (x.from || "") + (x.kind ? " · " + String(x.kind).toLowerCase() : "")) + mailBtns(x)).join("") + `</details>`).join("") || `<p class="note">Shows after the next mail scan.</p>`;
+    if (mh().mail_actions_on && store.get(K_DEC)) h += mailRecent();
     h += `<p class="note">The newest 10 per inbox, from the PC's mail scan. To see an email in full, open that inbox. Claude still screens and files on the PC.</p>`;
     h += sec("💼 Recruiters & job offers · last " + em.days + " days");
     h += (em.recruiters || []).map(r => row(r.from, dayName(r.date), r.subject + " · " + r.inbox + (r.archived ? " · archived" : ""))).join("") || `<p class="note">None found.</p>`;
@@ -963,6 +1033,16 @@ const SHEETS = {
       `<div class="r ${x.over_24h ? "neg" : ""}"><a class="umreply" href="${UM_REPLY + encodeURIComponent(String(x.id).toLowerCase())}" target="_blank" rel="noopener">Reply ↗</a></div></div>`).join("")
       : `<p class="note">Nothing waiting. 👍</p>`;
     h += `<p class="note">Reply opens the item in UseMart → Account → Owner controls → Support & reports (sign in as an admin on this phone once).</p>`;
+    const g = umSurge();      // v29 site load
+    h += sec("📈 Site load · last " + esc(Number(g && g.window_min) || 5) + " min");
+    if (!g) h += `<p class="note">Shows once the UseMart server sends its next update.</p>`;
+    else {
+      const why = umStrain(g), n = Number(g.requests) || 0;
+      h += row("Requests", esc(n), "") + row("Slowest 5% of answers", n ? esc((Number(g.p95_ms) / 1000).toFixed(1)) + " s" : "-", "limit 2.0 s", n >= 50 && Number(g.p95_ms) > 2000 ? "neg" : "") +
+           row("Failed answers", esc(Number(g.errors_5xx) || 0) + (n ? " (" + esc((Number(g.error_rate) * 100).toFixed(1)) + "%)" : ""), "limit 5%", n >= 50 && Number(g.error_rate) > 0.05 ? "neg" : "") +
+           row("Core marketplace mode", g.core_mode ? "ON" : "off", g.core_mode ? "extras paused" : "emergency switch", g.core_mode ? "neg" : "");
+      h += `<p class="note">${why.length ? "<b>Under strain.</b> If the site is struggling: UseMart → Owner controls → turn ON Core marketplace mode (keeps buying, selling and messages; pauses AI and extras)." : n < 50 ? "Quiet: limits only count once 50+ requests come in." : "All within limits."} Updated ${esc(ago(umAge()))}. Steps: docs/SURGE_PLAYBOOK.md in UseMart.</p>`;
+    }
     return h;
   }],
   games: ["🏟️ Games today", () => {          // v20
@@ -1085,7 +1165,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "28";
+const VERSION = "29";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1476,6 +1556,7 @@ document.addEventListener("click", e => {
   if (a && a.dataset.act === "close") { $("#sheet").classList.add("hidden"); $("#sheet").dataset.key = ""; }
   if (a && a.dataset.act === "refresh") { $("#fresh").textContent = "refreshing…"; load(); }
   if (a && a.dataset.act === "update") applyUpdate();     // v21
+  if (a && a.dataset.act === "mailact") { mailTap(a.dataset.do, a.dataset.key, a.dataset.undoes); mailRedraw(); }   // v27
   if (a && a.dataset.act === "hublook") {                 // v22
     const k = a.dataset.hub + ".look";
     store.set(k, store.get(k) === "tiles" ? "classic" : "tiles");

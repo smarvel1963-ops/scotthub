@@ -180,3 +180,5 @@ body.tl .needs li.more { padding: 6px 12px; font-size: 13px; }
 .ideaform .pay { margin-top: 0; padding: 10px; font-size: 15px; }
 /* v26 new mail by inbox */
 .mailbox { border-bottom: 1px solid var(--line); padding: 8px 0; } .mailbox summary { cursor: pointer; font-weight: 700; font-size: 15px; } .mailbox summary small { color: var(--muted); font-weight: 400; margin-left: 6px; } .mailbox .row { padding-left: 4px; }
+.mailact { display: flex; gap: 8px; align-items: center; padding: 2px 4px 10px; border-bottom: 1px solid var(--line); } .mailact small { color: var(--muted); }
+.mailnote { display: block; color: var(--muted); padding: 2px 4px 0; }
