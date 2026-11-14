@@ -67,6 +67,11 @@
  * v29 USEMART SITE LOAD (Scott 11/12 "finish what you can"; UseMart N12): the usemart part's surge numbers (this server, last 5 min) on the
  * UseMart support screen, plus a red card on the home band when the site is under strain (same limits as the server's alert email).
  * v27 mail buttons ship here too: they show only when the PC says mail_actions_on, and need relay v9 deployed.
+ * v30 WHERE WE STAND (Scott 11/13 in the Desktop session: "so we need to tie dectop into scott hub since it personal app just got me", then
+ * "Yes, add them"): three parts of Marvel Desktop's snapshot - where_we_stand (programs + businesses, their latest summary and how fresh it
+ * is), approvals_waiting (Desktop's outgoing posts / emails, NOT Claude's A- questions) and board (Next up / Building / Live). A "Where we
+ * stand" sheet + tile, and a What needs you card when posts wait (red when any expire today). SEE ONLY: deciding stays on the PC's APPROVALS
+ * page. A part may be {error} -> "--", or trimmed to counts when the desktop part runs long.
  * "Classic" still goes back and stays. RELEASE RULE: every push bumps VERSION here, version.json and the cache name in sw.js.
  * v22 NEW LOOKS TILE (Scott 11/03: "i still dont see updates on my apps", on 1.58.2): the Day Hub + Cruise Hub new looks are off for customers and
  * only opened from a preview link. All Hubs share this address, so this tile sets each one's look key for THIS phone, with no link to tap.
@@ -560,6 +565,9 @@ function needs() {
   if (qs.length) add("warn", "🗳️ " + qs.length + " question" + (qs.length > 1 ? "s" : "") + " from Claude", qs.slice(0, 2).map(q => q.id + " " + q.ask).join(" · "), "approvals");
   const ready = fx().enabled ? fxList().filter(f => f.status === "fix_ready") : [];
   if (ready.length) add("good", "✅ " + ready.length + " fix" + (ready.length > 1 ? "es" : "") + " ready for your Yes", ready.slice(0, 2).map(f => f.title).join(" · "), "approvals");
+  { const A = wsA(), n = Number(A.count) || 0, ex = Number(A.expire_today) || 0;     // v30: Desktop's outgoing posts / emails, see only
+    if (!A.error && n) add(ex ? "bad" : "warn", "📨 " + n + " Desktop approval" + (n > 1 ? "s" : "") + " waiting" + (ex ? " · " + ex + " expire today" : ""),
+                          arr(A.rows).slice(0, 2).map(r => r.title).filter(Boolean).concat("decide on the PC").join(" · "), "stand"); }
   if (h.pc && h.pc.active === false) add("warn", h.pc.handed_to_server ? "PC handed the operation to the server" : "MasterHub app isn't running on the PC", "Last PC heartbeat " + ago(h.pc.heartbeat_age_min), "health");
   const sv = h.server || {};
   if (!S) {             // the PC's view of the server - replaced by the server's own report while it's in use
@@ -772,6 +780,13 @@ function financeBlock() {
   return h;
 }
 
+// v30: Marvel Desktop's where-we-stand parts. Each may be {error} (shown as "--", never a guess) or trimmed to counts.
+const wsW = () => obj(dk().where_we_stand), wsA = () => obj(dk().approvals_waiting), wsB = () => obj(dk().board);
+const wsHave = () => ["where_we_stand", "approvals_waiting", "board"].some(k => dk()[k] && typeof dk()[k] === "object");
+const wsCounts = c => Object.entries(obj(c)).map(([k, v]) => k + " " + v).join(" · ");
+const wsNote = x => x.error ? `<p class="note">-- ${esc(x.error)}</p>` : x.trimmed ? `<p class="note">Counts only right now: ${esc(x.trimmed)}</p>` : "";
+const wsDay = s => { const d = String(s || "").slice(0, 10); return isYmd(d) ? dayName(d) : ""; };
+const WS_TONE = { FRESH: "pos", STALE: "old", OLD: "neg", UNWRITTEN: "old" };
 const HUB_LOOKS = [["dayhub", "Day Hub"], ["cruisehub", "Cruise Hub"]];     // v22: the Hubs with a new look so far
 const SHEETS = {
   bets: ["🎯 Bets", () => {
@@ -916,6 +931,29 @@ const SHEETS = {
     const old = isYmd(P.updated) && (Date.now() - new Date(P.updated + "T12:00:00").getTime()) > 3 * 864e5;
     return (P.updated ? `<p class="note">Checked ${isYmd(P.updated) ? esc(dayName(P.updated)) : "?"}${old ? " · OLD: the daily check hasn't run" : ""}</p>` : "")
       + G.map(g => sec(g.title || "") + arr(g.rows).map(r => row(r[0] || "", r[1] || "", r[2] || "")).join("") + (g.note ? `<p class="note">${esc(g.note)}</p>` : "")).join("");
+  }],
+  // v30 WHERE WE STAND: Marvel Desktop's programs + businesses, the approvals waiting on the PC (see only) and the board
+  stand: ["🧭 Where we stand", () => {
+    if (!wsHave()) return `<p class="note">Nothing from Marvel Desktop yet. It comes with the PC's next upload.</p>`;
+    const W = wsW(), A = wsA(), B = wsB(), t = todayCT();
+    let h = sec("Programs + businesses" + (W.error || !W.counts ? "" : " · " + wsCounts(W.counts))) + wsNote(W);
+    if (!W.error) h += arr(W.rows).map(r => row((r.kind === "BUSINESS" ? "💼 " : "🖥️ ") + (r.name || "?"), r.status || "",
+        [r.what, r.stand ? "Stand: " + r.stand : "no stand written yet", wsDay(r.stand_on), r.stand_state && r.stand_state !== "FRESH" ? r.stand_state : "",
+         wsDay(r.last_note_on) ? "last note " + wsDay(r.last_note_on) : ""].filter(Boolean).join(" · "), WS_TONE[r.stand_state] || "")).join("");
+    h += sec("Approvals waiting on the PC" + (A.error ? "" : " · " + (Number(A.count) || 0))) + wsNote(A);
+    if (!A.error) {
+      const ex = Number(A.expire_today) || 0, np = Number(A.approved_not_posted) || 0;
+      if (ex || np) h += `<p class="note">${esc([ex ? ex + " expire today" : "", np ? np + " approved but not posted yet" : ""].filter(Boolean).join(" · "))}</p>`;
+      h += arr(A.rows).map(r => { const gu = String(r.good_until || "").slice(0, 10), late = isYmd(gu) && gu <= t;
+        return row(r.title || "?", isYmd(gu) ? (late ? "ends today" : "until " + dayName(gu)) : "",
+                   [r.venture, r.kind, r.channel, wsDay(r.created_day) ? "made " + wsDay(r.created_day) : ""].filter(Boolean).join(" · "), late ? "neg" : ""); }).join("");
+      h += `<p class="note">See only. Approve or turn them down on the PC's APPROVALS page.</p>`;
+    }
+    h += sec("Board" + (B.error || !B.counts ? "" : " · " + wsCounts(B.counts))) + wsNote(B);
+    if (!B.error) [["Next up", B.next_up], ["Building", B.building], ["Live", B.live]].forEach(([n, l]) => {
+      if (arr(l).length) h += sec(n) + arr(l).map(x => row(x.title || "?", "", x.business || "")).join("");
+    });
+    return h;
   }],
   ads: ["📣 Ads & posting", () => {
     const a = dk().ads || {}, ac = obj(mh().ad_counts), tot = obj(ac.total);
@@ -1165,7 +1203,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "29";
+const VERSION = "30";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1475,6 +1513,12 @@ function tileList() {
   add("todo", "✅", "To-do", String(hl.open_total ?? "-"), "open", "", "", first ? String(first.title).replace(/^[^A-Za-z0-9]+/u, "").replace(/\s*\(you.*$/i, "") : "");
   add("hublooks", "✨", "New looks", HUB_LOOKS.filter(h => store.get(h[0] + ".look") === "tiles").length + " of " + HUB_LOOKS.length, "on", "", "", "in my other Hubs");
   { const P = obj(mh().projects), H = obj(P.headline); if (arr(P.groups).length) add("projects", "🚀", "Projects", H.value || "Open", H.unit || "", "", "", H.sub || "Instagram · app testing · apps"); }   // v28
+  if (wsHave()) {      // v30
+    const W = wsW(), A = wsA(), B = wsB(), wc = obj(W.counts), bc = obj(B.counts), n = Number(A.count) || 0, ex = Number(A.expire_today) || 0;
+    add("stand", "🧭", "Where we stand", W.error || wc.RUNNING == null ? "--" : String(wc.RUNNING), W.error || wc.RUNNING == null ? "" : "running",
+        A.error ? "" : ex ? ex + " EXPIRE TODAY" : n ? n + " TO APPROVE" : "", ex ? "neg" : n ? "old" : "",
+        B.error ? "board --" : "next up " + (bc["NEXT UP"] ?? arr(B.next_up).length) + " · building " + (bc.BUILDING ?? arr(B.building).length));
+  }
   return T;
 }
 const TL_FIXED = 6;      // Today, Games, Till payday, Next up, Systems, Birthdays
