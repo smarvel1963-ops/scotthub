@@ -67,6 +67,10 @@
  * v29 USEMART SITE LOAD (Scott 11/12 "finish what you can"; UseMart N12): the usemart part's surge numbers (this server, last 5 min) on the
  * UseMart support screen, plus a red card on the home band when the site is under strain (same limits as the server's alert email).
  * v27 mail buttons ship here too: they show only when the PC says mail_actions_on, and need relay v9 deployed.
+ * v31 SALES SQUARES (Scott 11/15: "scott hub needs to keep up with winable sales and whop sales each heve own square"): a Winible tile
+ * (new subscribers in 30 days, NEW chip for the last 2 days, last sale) and a Whop tile (active members, NEW chip, paid + this year's
+ * revenue), each opening its own sheet. Same Marvel Desktop data as the Business tile: the sale emails (email.sales; Whop announcements
+ * like "pay in their local currency" are left out), the Whop funnel (business.funnel) and the CMMG books (cmmg.bank.whop_revenue).
  * v30 WHERE WE STAND (Scott 11/13 in the Desktop session: "so we need to tie dectop into scott hub since it personal app just got me", then
  * "Yes, add them"): three parts of Marvel Desktop's snapshot - where_we_stand (programs + businesses, their latest summary and how fresh it
  * is), approvals_waiting (Desktop's outgoing posts / emails, NOT Claude's A- questions) and board (Next up / Building / Live). A "Where we
@@ -153,6 +157,10 @@ async function load() {
 
 const mh = () => (DATA && DATA.masterhub && DATA.masterhub.data) || {};
 const dk = () => (DATA && DATA.desktop && DATA.desktop.data) || {};
+// v31: a real sale email, per platform (Whop also mails announcements, e.g. "New subscribers can pay in their local currency")
+const SALE_RE = /new subscriber|new member|new sale|made a sale|payment received|purchase|payout|renewed/i, NOT_SALE_RE = /can pay in|local currency|webinar|newsletter/i;
+const salesOf = p => arr(obj(obj(dk().email).sales).rows).filter(r => r && r.platform === p && SALE_RE.test(r.subject || "") && !NOT_SALE_RE.test(r.subject || ""));
+const salesSince = (L, days) => L.filter(r => isYmd(r.date) && r.date >= addDays(todayCT(), -days)).length;
 // v13: the server's own report. Its numbers and words are shown escaped, never trusted as markup.
 const arr = x => Array.isArray(x) ? x : [];
 const obj = x => (x && typeof x === "object" && !Array.isArray(x)) ? x : {};
@@ -614,7 +622,7 @@ function needs() {
   if (adFails.length) add("warn", "📣 " + adFails.length + " ad channel" + (adFails.length > 1 ? "s" : "") + " failed yesterday",
       adFails.map(r => r.task.replace(/ - .*/, "")).join(" · "), "ads");
   const em = d.email || {};
-  const sl = (em.sales || {}).rows || [], newSale = sl.filter(r => r.date >= addDays(todayCT(), -2));
+  const newSale = salesOf("Winible").concat(salesOf("Whop")).filter(r => isYmd(r.date) && r.date >= addDays(todayCT(), -2));   // v31: real sale emails only
   if (newSale.length) add("good", "💰 " + newSale.length + " new sale" + (newSale.length > 1 ? "s" : "") + " (Winible/Whop)",
       newSale.slice(0, 2).map(r => r.platform + ": " + r.subject).join(" · "), "business");
   if (em.recruiter_count) add("warn", "💼 " + em.recruiter_count + " recruiter message" + (em.recruiter_count > 1 ? "s" : "") + " (last " + em.days + " days)",
@@ -854,6 +862,23 @@ const SHEETS = {
     }
     h += `<p class="note">Paid marks hide the item on this phone. Marvel Desktop still shows it until the payment is in your books.</p>`;
     return h;
+  }],
+  winible: ["🎟️ Winible", () => {      // v31
+    const W = salesOf("Winible");
+    let h = sec("New subscribers");
+    h += row("Last 7 days", String(salesSince(W, 7))) + row("Last 30 days", String(salesSince(W, 30)));
+    h += sec("Sale emails");
+    h += W.map(r => row(r.subject, dayName(r.date), (r.inbox || "") + (r.archived ? " · was archived" : ""))).join("") || `<p class="note">No Winible sale emails yet.</p>`;
+    return h + `<p class="note">Counted from Winible's "You Have a New Subscriber!" emails (Winible has no API), read by Marvel Desktop.</p>`;
+  }],
+  whop: ["💜 Whop", () => {      // v31
+    const fn = obj(obj(dk().business).funnel), c = obj(dk().cmmg), rev = obj(c.bank).whop_revenue, P = salesOf("Whop");
+    let h = sec("Members" + (fn.as_of ? " · " + fn.as_of : ""));
+    h += row("Active members", fn.whop_active ?? "-") + row("Paid", fn.whop_paid ?? "-", fn.whop_gross != null ? "gross " + money(fn.whop_gross) : "");
+    if (rev != null) h += row("Whop revenue this year", money(rev), "CMMG books" + (c.built_at ? " · " + c.built_at : ""));
+    h += sec("Sale emails");
+    h += P.map(r => row(r.subject, dayName(r.date), (r.inbox || "") + (r.archived ? " · was archived" : ""))).join("") || `<p class="note">No Whop sale emails yet (Whop's announcements are left out).</p>`;
+    return h + `<p class="note">Members from Marvel Desktop's sales funnel; sale emails from your inbox. Day Hub / Cruise Hub buyers (Marvel Corp's Whop) aren't connected yet.</p>`;
   }],
   business: ["📈 Business", () => {
     const bz = dk().business || {}, f = bz.followers || {}, fn = bz.funnel || {};
@@ -1203,7 +1228,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "30";
+const VERSION = "31";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1503,9 +1528,14 @@ function tileList() {
   const adT = obj(obj(m.ad_counts).total);    // v25
   if (obj(m.ad_counts).total) add("ads", "📊", "Ads posted", String(adT.today || 0), "today", adCountOld() ? "OLD" : "", adCountOld() ? "old" : "", (adT.week || 0) + " this week · " + (adT.month || 0) + " this month");
   const bz = d.business || {}, fn = bz.funnel || {}, dc = obj(obj(bz.followers).discord).count, bk = arr(bz.books)[0];
-  const sl = arr(obj(em.sales).rows).filter(r => r.date >= addDays(todayCT(), -2)).length;
+  const sl = salesSince(salesOf("Winible").concat(salesOf("Whop")), 2);      // v31: real sale emails only (not Whop's announcements)
   add("business", "📈", "Business", String(fn.whop_active ?? "-"), "Whop", sl ? sl + " NEW SALE" + (sl > 1 ? "S" : "") : "", sl ? "pos" : "",
       [dc != null ? "Discord " + dc : "", bk && bk.rank ? "book #" + Number(bk.rank).toLocaleString() : ""].filter(Boolean).join(" · "));
+  { const W = salesOf("Winible"), n2 = salesSince(W, 2), last = W.map(r => r.date).filter(isYmd).sort().pop();      // v31
+    add("winible", "🎟️", "Winible", String(salesSince(W, 30)), "new in 30 days", n2 ? n2 + " NEW" : "", n2 ? "pos" : "", last ? "last sale " + dayName(last) : "no sales yet"); }
+  { const P = salesOf("Whop"), n2 = salesSince(P, 2), rev = obj(obj(d.cmmg).bank).whop_revenue;      // v31
+    add("whop", "💜", "Whop", fn.whop_active != null ? String(fn.whop_active) : "-", "active", n2 ? n2 + " NEW" : "", n2 ? "pos" : "",
+        [fn.whop_paid != null ? fn.whop_paid + " paid" : "", rev != null ? money(rev) + " this year" : ""].filter(Boolean).join(" · ") || "no Whop numbers yet"); }
   const c = d.cmmg || {};
   add("cmmg", "🏢", "CMMG", c.company ? money(c.scott_share) : "-", "", "", "",       // always here: the sheet also holds the posted record
       c.company ? "your 50%" + (isYmd(c.last_reconciled) ? " · books " + dayName(c.last_reconciled) : "") : "posted record");
