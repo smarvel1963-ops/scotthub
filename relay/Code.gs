@@ -53,6 +53,13 @@
  *
  * v9 (same day, "you still screen and file"): Archive / Trash / Undo taps on one email. Held here for the PC, which is the only thing that can act on them; this relay never touches mail.
  *
+ * v10 (Scott 11/15: "Scott Hub Server checks bots good watcher good server up drives staying synced and alert notification if server is
+ * down"): SERVER WATCH. A time trigger runs checkServer() every 10 minutes. The server counts as DOWN when the PC's newest part is fresh
+ * and says the server isn't checking in, or when the PC's part is old AND the server's own report is old too (nobody has heard from it).
+ * Two checks in a row before an email (a single blip never mails), one email when it goes down, one when it's back. The email goes to
+ * this script's own Google account (Scott's Gmail), so the Gmail app on his phone rings. "get" also returns parts.watch = {state, since,
+ * checked_at} so the phone can show the alert is on. Turn it on: run installServerWatch() once in the editor (it asks for the
+ * "send email" + "triggers" permissions); removeServerWatch() turns it off. Nothing else changes.
  * Tasks (POST, body JSON):
  *   {task:"put",    key, part:"masterhub"|"desktop", data:{...}}             PC
  *   {task:"put",    key:<server key>, part:"server", data:{...}}             server (v4)
@@ -141,6 +148,7 @@ function doPost(e) {
       const taps = listDecisions(P, DEC_SHOWN).map(function (d) {
         return { id: d.id, answer: d.answer, sig: d.sig, tapped_at: d.tapped_at, relay_at: d.relay_at };
       });
+      parts.watch = watchInfo(P);              // v10
       return out({ ok: true, now: new Date().toISOString(), parts: parts, calendar: calendar(), decisions: taps });
     }
     return out({ error: "unknown task" });
@@ -150,6 +158,65 @@ function doPost(e) {
 }
 
 function doGet() { return out({ ok: true, app: "scotthub-relay" }); }
+
+// ---------------------------------------------------------------- v10 SERVER WATCH (see the header)
+const WATCH_STALE_MIN = 20;        // the PC part comes every 5 min, the server's report every 5 min while the PC is off
+function partAgeMin(P, part) {
+  const at = P.getProperty(part + "_at");
+  return at ? (Date.now() - new Date(at).getTime()) / 60000 : null;
+}
+function serverState(P) {
+  const mAge = partAgeMin(P, "masterhub"), sAge = partAgeMin(P, "server");
+  if (mAge == null && sAge == null) return { down: false, why: "" };   // nothing has ever reported here: not set up, not "down"
+  if (mAge != null && mAge <= WATCH_STALE_MIN) {
+    const m = getPart(P, "masterhub") || {}, sv = (((m.data || {}).health) || {}).server || {};
+    if (sv.error) return { down: false, why: "" };                    // the PC couldn't read the status file: not proof either way
+    const hb = sv.heartbeat_age_min;
+    if (sv.alive === false || (hb != null && hb > WATCH_STALE_MIN))
+      return { down: true, why: "The PC sees the server not checking in (last heartbeat " + (hb != null ? Math.round(hb) + " min ago" : "unknown") + ")." };
+    return { down: false, why: "" };
+  }
+  if (sAge != null && sAge <= WATCH_STALE_MIN) return { down: false, why: "" };
+  const quiet = Math.round(Math.min(mAge == null ? 99999 : mAge, sAge == null ? 99999 : sAge));
+  return { down: true, why: "Nothing from the server or the PC for " + (quiet >= 99999 ? "a long time" : quiet + " min") + " (power, internet or both)." };
+}
+function checkServer() {
+  const P = PropertiesService.getScriptProperties();
+  const st = serverState(P), was = P.getProperty("watch_state") || "up", strikes = Number(P.getProperty("watch_strikes") || 0);
+  P.setProperty("watch_checked_at", new Date().toISOString());
+  if (st.down) {
+    P.setProperty("watch_strikes", String(strikes + 1));
+    if (was !== "down" && strikes + 1 >= 2) {
+      P.setProperty("watch_state", "down");
+      P.setProperty("watch_since", new Date().toISOString());
+      P.setProperty("watch_why", st.why);
+      mailMe("⚠️ CMMG server looks DOWN", st.why + "\n\nChecked twice, 10 minutes apart. Remote Desktop: 93.127.143.55:1097.");
+    }
+  } else {
+    P.setProperty("watch_strikes", "0");
+    if (was === "down") {
+      const since = P.getProperty("watch_since");
+      P.setProperty("watch_state", "up");
+      mailMe("✅ CMMG server is back", "It's checking in again" + (since ? " (it looked down since " + since + ")" : "") + ".");
+    }
+  }
+  return st;
+}
+function mailMe(subject, body) {
+  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), subject, body + "\n\n- Scott Hub relay, server watch (every 10 min)");
+}
+function watchInfo(P) {
+  return { state: P.getProperty("watch_state") || "up", since: P.getProperty("watch_since") || null,
+           why: P.getProperty("watch_why") || null, checked_at: P.getProperty("watch_checked_at") || null };
+}
+function installServerWatch() {
+  removeServerWatch();
+  ScriptApp.newTrigger("checkServer").timeBased().everyMinutes(10).create();
+  return checkServer();
+}
+function removeServerWatch() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === "checkServer") ScriptApp.deleteTrigger(t); });
+}
 
 function config(P) {
   const all = P.getProperties();

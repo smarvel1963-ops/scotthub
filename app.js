@@ -67,6 +67,11 @@
  * v29 USEMART SITE LOAD (Scott 11/12 "finish what you can"; UseMart N12): the usemart part's surge numbers (this server, last 5 min) on the
  * UseMart support screen, plus a red card on the home band when the site is under strain (same limits as the server's alert email).
  * v27 mail buttons ship here too: they show only when the PC says mail_actions_on, and need relay v9 deployed.
+ * v32 SERVER CHECKS (Scott 11/15: "Scott Hub Server checks bots good watcher good server up drives staying synced and alert notification
+ * if server is down"): a Server tile + sheet with four checks - server up, bots good, watcher good, drives synced - from the PC's check
+ * (health.server: alive, bots incl. drive_watchdog, the watcher's status heartbeat that reaches the PC through Google Drive) or, with the
+ * PC off, the server's own report (watcher, bots, drive.control_ok). Plus the relay v10 server watch (parts.watch): the relay looks every
+ * 10 min and emails Scott once when the server goes quiet and once when it's back; the tile says ALERT ON when that watch is running.
  * v31 SALES SQUARES (Scott 11/15: "scott hub needs to keep up with winable sales and whop sales each heve own square"): a Winible tile
  * (new subscribers in 30 days, NEW chip for the last 2 days, last sale) and a Whop tile (active members, NEW chip, paid + this year's
  * revenue), each opening its own sheet. Same Marvel Desktop data as the Business tile: the sale emails (email.sales; Whop announcements
@@ -157,6 +162,25 @@ async function load() {
 
 const mh = () => (DATA && DATA.masterhub && DATA.masterhub.data) || {};
 const dk = () => (DATA && DATA.desktop && DATA.desktop.data) || {};
+// v32 SERVER CHECKS: [name, ok (true / false / null = unknown), detail] x4, from the PC's check or (PC off) the server's own report
+const SRV_FRESH_MIN = 10;        // the watcher rewrites its status every minute; Drive brings it to the PC within a few
+function srvChecks() {
+  const sv = obj(obj(mh().health).server), bots0 = b => { const n = Object.keys(b), d = n.filter(k => !b[k]); return [n.length ? !d.length : null, n.length ? (d.length ? "DOWN: " + d.join(", ") : n.length + "/" + n.length + " up") : "no bot list"]; };
+  if (serverOn()) {
+    const S = sv13(), w = obj(S.watcher), d = obj(S.drive), [bok, btx] = bots0(obj(S.bots));
+    return { src: "the server's own report, " + ago(svAge()), list: [["Server up", true, "its report came " + ago(svAge())], ["Bots good", bok, btx],
+      ["Watcher good", w.alive === true ? true : w.alive === false ? false : null, "heartbeat " + ago(w.heartbeat_age_min)],
+      ["Drives synced", d.control_ok === true ? true : d.control_ok === false ? false : null, d.control_ok === false ? "Google Drive NOT mounted on the server" : "Google Drive mounted on the server"]] };
+  }
+  if (pcStale() || sv.error || sv.alive == null)
+    return { src: pcStale() ? "no fresh word from the PC or the server" : "the PC can't read the server's status", list: [["Server up", null, "unknown"], ["Bots good", null, ""], ["Watcher good", null, ""], ["Drives synced", null, ""]] };
+  const hb = sv.heartbeat_age_min, bots = obj(sv.bots), [bok, btx] = bots0(bots), fresh = hb != null && hb <= SRV_FRESH_MIN;
+  return { src: "the PC's check, " + ago(ageMin(mh().generated_at)), list: [
+    ["Server up", sv.alive === true, sv.alive ? "checking in" : "not checking in" + (hb != null ? " (last " + ago(hb) + ")" : "")], ["Bots good", bok, btx],
+    ["Watcher good", hb == null ? null : fresh, "status written " + ago(hb)],
+    ["Drives synced", bots.drive_watchdog === false ? false : hb == null ? null : fresh, (bots.drive_watchdog === true ? "Drive watchdog up · " : bots.drive_watchdog === false ? "Drive watchdog DOWN · " : "") + "server to PC through Drive " + ago(hb)]] };
+}
+const watchOn = () => { const W = obj(DATA && DATA.watch), a = ageMin(W.checked_at); return a != null && a <= 25 ? W : null; };   // relay v10
 // v31: a real sale email, per platform (Whop also mails announcements, e.g. "New subscribers can pay in their local currency")
 const SALE_RE = /new subscriber|new member|new sale|made a sale|payment received|purchase|payout|renewed/i, NOT_SALE_RE = /can pay in|local currency|webinar|newsletter/i;
 const salesOf = p => arr(obj(obj(dk().email).sales).rows).filter(r => r && r.platform === p && SALE_RE.test(r.subject || "") && !NOT_SALE_RE.test(r.subject || ""));
@@ -863,6 +887,15 @@ const SHEETS = {
     h += `<p class="note">Paid marks hide the item on this phone. Marvel Desktop still shows it until the payment is in your books.</p>`;
     return h;
   }],
+  server: ["🖥️ Server", () => {      // v32
+    const C = srvChecks(), W = watchOn();
+    let h = sec("Checks · " + C.src);
+    C.list.forEach(([k, ok, d]) => { h += row(k, ok === true ? "✓ good" : ok === false ? "✗ problem" : "?", d, ok === true ? "pos" : ok === false ? "neg" : ""); });
+    h += sec("Alert if the server goes down");
+    h += W ? row("Email alert", W.state === "down" ? "server DOWN" : "on", (W.state === "down" && W.since ? "down since " + when(W.since) + " · " : "") + "checked " + ago(ageMin(W.checked_at)) + " · emails your Gmail", W.state === "down" ? "neg" : "pos")
+           : row("Email alert", "not on yet", "the relay's server watch hasn't run yet");
+    return h + `<p class="note">The PC checks the server every 5 minutes; with the PC off, the server reports on itself. The relay looks every 10 minutes and emails you once when the server goes quiet, and again when it's back. More detail: Systems.</p>`;
+  }],
   winible: ["🎟️ Winible", () => {      // v31
     const W = salesOf("Winible");
     let h = sec("New subscribers");
@@ -1228,7 +1261,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "31";
+const VERSION = "32";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1491,6 +1524,9 @@ function tileList() {
   if (on) add("health", "🩺", "Systems", "PC off", "", n ? "FIX" : "SERVER", n ? "neg" : "old", probs || "server report · " + up + "/" + bots.length + " bots", n ? "bad" : "warn");
   else if (pcStale()) add("health", "🩺", "Systems", "PC quiet", "", "STALE", "old", "last report " + ago(ageMin(m.generated_at)), "warn");
   else add("health", "🩺", "Systems", n ? String(n) : "All up", n ? (n > 1 ? "problems" : "problem") : "", n ? "FIX" : "OK", n ? "neg" : "pos", probs || okLine, n ? "bad" : "");
+  { const C = srvChecks(), L = C.list, bad = L.filter(x => x[1] === false), ok = L.filter(x => x[1] === true).length, upBad = L[0][1] === false;      // v32
+    add("server", "🖥️", "Server", bad.length ? String(bad.length) : ok === 4 ? "4/4" : "?", bad.length ? (bad.length > 1 ? "problems" : "problem") : ok === 4 ? "checks OK" : "unknown",
+        upBad ? "DOWN" : bad.length ? "CHECK" : watchOn() ? "ALERT ON" : "", upBad || bad.length ? "neg" : "pos", bad.map(x => x[0]).join(" · ") || "bots · watcher · drives", upBad ? "bad" : bad.length ? "warn" : ""); }
   const DT = dateEvents(), d0 = DT[0], bday = d0 && dateIn(d0) === 0, dwk = DT.filter(e => dateIn(e) <= 7).length;      // v20
   const far = CAL && Array.isArray(CAL.birthdays);          // relay v7 sends 12 months; an older relay only 7 days
   add("dates", "🎂", "Birthdays", d0 ? dateDay(d0) : "None", "", bday ? "TODAY" : "", bday ? "old" : "",
@@ -1551,7 +1587,7 @@ function tileList() {
   }
   return T;
 }
-const TL_FIXED = 6;      // Today, Games, Till payday, Next up, Systems, Birthdays
+const TL_FIXED = 7;      // Today, Games, Till payday, Next up, Systems, Server (v32), Birthdays
 function renderTiles() {
   const g = $("#tiles");
   if (!g || !tilesOn()) return;
