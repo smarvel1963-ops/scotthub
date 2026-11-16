@@ -67,6 +67,10 @@
  * v29 USEMART SITE LOAD (Scott 11/12 "finish what you can"; UseMart N12): the usemart part's surge numbers (this server, last 5 min) on the
  * UseMart support screen, plus a red card on the home band when the site is under strain (same limits as the server's alert email).
  * v27 mail buttons ship here too: they show only when the PC says mail_actions_on, and need relay v9 deployed.
+ * v33 MARVEL CORP APPS (Scott 11/15 in the Desktop session: "Scott hub too" -> "yes thats what i meant"): an Apps tile opening every Marvel
+ * Corp phone app + UseMart - logo + short note in a list; tap one for the big QR code, the price and the pitch, to show someone. The same
+ * list as UseMart's Marvel Corp Phone Apps (SH_APPS = a copy of usemart api/src/apps.ts - change it there, copy it here). The QR is drawn
+ * on the phone (qrcodejs, the same library Marvel Magic uses). Scott Hub itself is private and never in this list.
  * v32 SERVER CHECKS (Scott 11/15: "Scott Hub Server checks bots good watcher good server up drives staying synced and alert notification
  * if server is down"): a Server tile + sheet with four checks - server up, bots good, watcher good, drives synced - from the PC's check
  * (health.server: alive, bots incl. drive_watchdog, the watcher's status heartbeat that reaches the PC through Google Drive) or, with the
@@ -820,6 +824,28 @@ const wsNote = x => x.error ? `<p class="note">-- ${esc(x.error)}</p>` : x.trimm
 const wsDay = s => { const d = String(s || "").slice(0, 10); return isYmd(d) ? dayName(d) : ""; };
 const WS_TONE = { FRESH: "pos", STALE: "old", OLD: "neg", UNWRITTEN: "old" };
 const HUB_LOOKS = [["dayhub", "Day Hub"], ["cruisehub", "Cruise Hub"]];     // v22: the Hubs with a new look so far
+// v33 Marvel Corp apps (copied from usemart api/src/apps.ts 11/15; icons = each app's own)
+const SH_APPS = [{"id": "usemart","name": "UseMart","line": "Buy and sell near you - local listings, bargains, stores and wanted posts, on your phone.","url": "https://usemart.net/#getapp","icon": "https://usemart.net/icon-192.png","features": ["Shop local listings, bargains and stores near you - free","Snap a photo and list what you're selling in a minute","Wanted: say what you're looking for and get told when it shows up","Post to your local Facebook buy-and-sell groups from one place"],"price": "Free to shop","pro": {"label": "Seller plans","price": "from $4.99/mo","trial": "60 days free","url": "https://usemart.net/#plans"}},{"id": "day","name": "Day Hub","line": "Your whole day on one screen - schedule, weather, to-dos and bills together.","url": "https://smarvel1963-ops.github.io/dayhub/","icon": "https://smarvel1963-ops.github.io/dayhub/icon-192.png","features": ["Schedule, weather, to-dos and bills together","Brain dump: say it once, it sorts itself","Morning brief and reminders"],"price": "Free","pro": {"label": "Day Hub Pro","price": "$4.99/mo or $29.99/yr","trial": "30 days free","url": "https://whop.com/commander-marvel-por-picks/day-hub-pro"}},{"id": "money","name": "Money Hub","line": "What you have, what's coming, what you can afford.","url": "https://smarvel1963-ops.github.io/moneyhub/","icon": "https://smarvel1963-ops.github.io/moneyhub/icon-192.png","features": ["Bank, cards, Cash App, Venmo and PayPal in one picture, read on your phone","Can I afford it? Yes, tight or not yet, with the math","Bills before payday, cash flow, a 60-day forecast and debt payoff","Never asks for a bank password"],"price": "Free","pro": {"label": "Money Hub Pro","price": "$2.99/mo","trial": "30 days free","url": "https://whop.com/commander-marvel-por-picks/money-hub-pro"}},{"id": "auto","name": "Auto Hub","line": "Every car you own, looked after - type the VIN and it fills itself in.","url": "https://smarvel1963-ops.github.io/autohub/","icon": "https://smarvel1963-ops.github.io/autohub/icon-192.png","features": ["Type the VIN and your car fills itself in","Oil, tires, brakes due by miles or months, plus fuel and MPG","Free safety recall checks, insurance and registration reminders","Extras garage, cost to own and a build sheet to share"],"price": "Free","pro": {"label": "Auto Hub Pro","price": "$2.99/mo","trial": "30 days free","url": "https://whop.com/commander-marvel-por-picks/auto-hub-pro"}},{"id": "health","name": "Health Hub","line": "Meds, readings, steps, sleep and appointments in one place.","url": "https://smarvel1963-ops.github.io/healthhub/","icon": "https://smarvel1963-ops.github.io/healthhub/icon-192.png","features": ["Meds with reminders, taken / skipped and refill countdowns","Blood pressure, glucose, weight and more, as easy charts","Steps, workouts, sleep and water as daily rings + a Health Score","Appointments, a records vault and a one-tap emergency card"],"price": "Free","pro": null},{"id": "home","name": "Home Hub","line": "Know your home. Fix it. Improve it. Protect it.","url": "https://smarvel1963-ops.github.io/homehub/","icon": "https://smarvel1963-ops.github.io/homehub/icon-192.png","features": ["Every room, yard and system in one place","Items, maintenance tasks and notes per room","Repeating reminders so nothing gets missed","Hub Predicted Value: what your home is worth, from recent sales near you"],"price": "Free","pro": null},{"id": "trip","name": "Trip Hub","line": "Flights, hotels and road trips - sorted.","url": "https://smarvel1963-ops.github.io/triphub/","icon": "https://smarvel1963-ops.github.io/triphub/icon-192.png","features": ["Paste a confirmation, get your bookings","Leave-by times and Fix My Trip when plans change","Split the cost with your group"],"price": "Free","pro": {"label": "Trip Hub Pass","price": "$9.99/yr","trial": "30 days free","url": "https://whop.com/commander-marvel-por-picks/trip-hub-pass"}},{"id": "cruise","name": "Cruise Hub","line": "Every cruise, planned on your phone.","url": "https://smarvel1963-ops.github.io/cruisehub/","icon": "https://smarvel1963-ops.github.io/cruisehub/icon-192.png","features": ["Countdown, payments and due dates","Port days with all-aboard alarms","Ship and port guides, packing by bag"],"price": "Free","pro": {"label": "Cruise Hub Pass","price": "$9.99/yr","trial": "30 days free","url": "https://whop.com/commander-marvel-por-picks/cruise-hub-pass"}},{"id": "family","name": "Family Hub","line": "Your whole family in one place - calendar, chores, lists, messages and photos.","url": "https://smarvel1963-ops.github.io/familyhub/","icon": "https://smarvel1963-ops.github.io/familyhub/icon-192.png","features": ["One family calendar and shared shopping lists","Chores kids check off and you OK, with rewards","Family messages, photos and a family tree","Meal plans and recipes, shared across everyone's phones"],"price": "30 days free","pro": {"label": "Family Hub","price": "$25 once","trial": "30 days free","url": "https://whop.com/commander-marvel-por-picks/family-hub-a5"}},{"id": "pet","name": "Pet Hub","line": "Every pet's care and life story - birthdays, daily care, the vet, shots and memories.","url": "https://smarvel1963-ops.github.io/pethub/","icon": "https://smarvel1963-ops.github.io/pethub/icon-192.png","features": ["Ages and birthday countdowns for every pet","A daily care checklist, meds and shot reminders","Vet visits, weight and a pet passport","Memory Moments from the first day home"],"price": "Free","pro": null},{"id": "cooking","name": "Cooking Hub","line": "Tell it what you have and it finds dinner - recipes, cook along, meal plans and your family's cookbook.","url": "https://smarvel1963-ops.github.io/cookinghub/","icon": "https://smarvel1963-ops.github.io/cookinghub/icon-192.png","features": ["Dinner Finder: tell it what's in your kitchen, it shows what you can make","Cook Along: one step at a time, with timers and your phone reading each step","This Week's Table plans dinners and builds the grocery list","Write down Grandma's recipes with a photo of the card, and share them with other cooks if you want"],"price": "2 weeks free","pro": {"label": "Cooking Hub","price": "$2.99/mo or $19.99/yr","trial": "2 weeks free","url": "https://whop.com/commander-marvel-por-picks/cooking-hub-44"}},{"id": "magic","name": "Marvel Magic","line": "One guide for everything you watch - your streaming services, live TV, free channels and sports.","url": "https://smarvel1963-ops.github.io/marvelmagic/","icon": "https://smarvel1963-ops.github.io/marvelmagic/icon-192.png","features": ["Live TV guide with your channels, 1,500+ free channels and every game on its channel","What's on Netflix, Hulu, Peacock and more, picked for your taste","Coming Soon premieres, Where's My Game, Top 50 lists and Watch Later","Opens the real app to watch - never asks for a streaming password"],"price": "30 days free","pro": {"label": "Marvel Magic","price": "$4.99/mo","trial": "30 days free","url": "https://whop.com/commander-marvel-por-picks/marvel-magic"}},{"id": "universe","name": "Hub Universe","line": "Every Hub app on your phone, in one place.","url": "https://smarvel1963-ops.github.io/hubuniverse/","icon": "https://smarvel1963-ops.github.io/hubuniverse/icon-192.png","features": ["Your hubs orbit you, each with what's going on right now","What needs you across all of them, most urgent first","Today across everything in one timeline","Reads your other Hub apps on your phone and never changes them"],"price": "Free","pro": null}];
+const shApp = id => SH_APPS.find(a => a.id === id);
+const shPrice = a => a.price !== "Free" ? a.price : a.pro ? "Free · Pro" : "Free";
+function shAppList() {
+  return `<p class="note" style="margin-top:0">Tap one to show its QR code - point a phone's camera at it to open the app.</p>` + SH_APPS.map(a =>
+    `<div class="row shapp" data-open="app:${esc(a.id)}" role="button" tabindex="0"><img src="${esc(a.icon)}" alt="" loading="lazy"><div class="l"><b>${esc(a.name)}</b><small>${esc(a.line)}</small></div><div class="r">${esc(shPrice(a))} ›</div></div>`).join("");
+}
+function shAppPage(a) {
+  return `<button class="shback" data-open="apps">‹ All apps</button>
+    <div class="shhero"><img src="${esc(a.icon)}" alt=""><div><b>${esc(a.name)}</b><small>${esc(a.line)}</small></div></div>
+    <div class="shqr" id="shQr" aria-label="QR code for ${esc(a.name)}"></div>
+    <p class="note" style="text-align:center">📷 Scan with a phone camera to get ${esc(a.name)}</p>
+    <div class="shprice"><b>${esc(a.price)}</b>${a.pro ? ` · ${esc(a.pro.label)} ${esc(a.pro.price)}${a.pro.trial ? ` (${esc(a.pro.trial)})` : ""}` : " - nothing to pay"}</div>
+    <a class="shopen" href="${esc(a.url)}" target="_blank" rel="noopener">📱 Open ${esc(a.name)} ↗</a>
+    ${sec("What it does")}<ul class="shfeat">${a.features.map(f => `<li>${esc(f)}</li>`).join("")}</ul>`;
+}
+function shDrawQr(a) {
+  const el = document.getElementById("shQr"); if (!el) return;
+  try { if (window.QRCode) new QRCode(el, { text: a.url, width: 220, height: 220, colorDark: "#0b2b2e", colorLight: "#ffffff" }); else el.innerHTML = `<p class="note">QR code needs a connection - the Open button works.</p>`; }
+  catch (e) { el.innerHTML = `<p class="note">Couldn't draw the QR code - the Open button works.</p>`; }
+}
 const SHEETS = {
   bets: ["🎯 Bets", () => {
     const b = mh().bets || {}, p = b.last_published || {};
@@ -887,6 +913,7 @@ const SHEETS = {
     h += `<p class="note">Paid marks hide the item on this phone. Marvel Desktop still shows it until the payment is in your books.</p>`;
     return h;
   }],
+  apps: ["📱 Marvel Corp Apps", shAppList, true],      // v33 (true = needs no Desktop data)
   server: ["🖥️ Server", () => {      // v32
     const C = srvChecks(), W = watchOn();
     let h = sec("Checks · " + C.src);
@@ -1236,11 +1263,13 @@ const SHEETS = {
 };
 
 function openSheet(key) {
-  const s = SHEETS[key];
+  const app = /^app:/.test(key) ? shApp(key.slice(4)) : null;      // v33 one Marvel Corp app
+  const s = app ? [app.name, () => shAppPage(app), true] : SHEETS[key];
   if (!s) return;
   $("#sheetTitle").textContent = s[0];
-  $("#sheetBody").innerHTML = DATA ? s[1]() : `<p class="note">No data yet.</p>`;
+  $("#sheetBody").innerHTML = DATA || s[2] ? s[1]() : `<p class="note">No data yet.</p>`;
   $("#sheet").classList.remove("hidden");
+  if (app || key === "apps") { if (app) shDrawQr(app); const sc = $("#sheetBody").closest(".sheet-body"); if (sc) sc.scrollTop = 0; }   // a new page starts at its top
 }
 
 function render() {
@@ -1261,7 +1290,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "32";
+const VERSION = "33";
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1577,6 +1606,7 @@ function tileList() {
       c.company ? "your 50%" + (isYmd(c.last_reconciled) ? " · books " + dayName(c.last_reconciled) : "") : "posted record");
   const hl = m.hot_list || {}, first = arr(hl.top)[0];
   add("todo", "✅", "To-do", String(hl.open_total ?? "-"), "open", "", "", first ? String(first.title).replace(/^[^A-Za-z0-9]+/u, "").replace(/\s*\(you.*$/i, "") : "");
+  add("apps", "📱", "Apps", String(SH_APPS.length), "phone apps", "", "", "tap one: QR code + the pitch to show someone");      // v33
   add("hublooks", "✨", "New looks", HUB_LOOKS.filter(h => store.get(h[0] + ".look") === "tiles").length + " of " + HUB_LOOKS.length, "on", "", "", "in my other Hubs");
   { const P = obj(mh().projects), H = obj(P.headline); if (arr(P.groups).length) add("projects", "🚀", "Projects", H.value || "Open", H.unit || "", "", "", H.sub || "Instagram · app testing · apps"); }   // v28
   if (wsHave()) {      // v30
