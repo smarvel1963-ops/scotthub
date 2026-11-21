@@ -67,6 +67,12 @@
  * v29 USEMART SITE LOAD (Scott 11/12 "finish what you can"; UseMart N12): the usemart part's surge numbers (this server, last 5 min) on the
  * UseMart support screen, plus a red card on the home band when the site is under strain (same limits as the server's alert email).
  * v27 mail buttons ship here too: they show only when the PC says mail_actions_on, and need relay v9 deployed.
+ * v38 DAILY CHECKS (Scott 11/20 in the Desktop session: "spam and scrap emails gone important noted and box goes green on scott hub / ads
+ * all go out goes green / all daily checks turn green as task complete", "needs to be my info hub"; "Yes, build it"): a panel under the
+ * top card in BOTH looks - "Daily checks N of 9 green" + 9 boxes coloured GREEN / AMBER / RED / GREY with the title and Desktop's one-line
+ * reason. Desktop decides every colour (C:/MarvelDesktop/daily_checks_build.py -> the desktop part's daily_checks); this file only paints
+ * them. Missing / error / not today's -> "--" with the reason, never boxes from nothing. Tap a box -> its tab (Email, Ads, Projects,
+ * Money) or the full Daily checks sheet.
  * v37 eBAY (Scott 11/20: "also an ebay info box to my scott hub"): an eBay tile + sheet - the seller account (usemartstore, feedback;
  * public facts only, never the sign-in email), the Starter Store "UseMart Finds" (price, renewal), where the developer appeal stands, buttons to the
  * store, Seller Hub, active listings, a new listing and the subscription page. Typed by Claude into EBAY below (no eBay API - eBay denied
@@ -845,6 +851,39 @@ function shAppPage(a) {
     <a class="shopen" href="${esc(a.url)}" target="_blank" rel="noopener">📱 Open ${esc(a.name)} ↗</a>
     ${sec("What it does")}<ul class="shfeat">${a.features.map(f => `<li>${esc(f)}</li>`).join("")}</ul>`;
 }
+// v38 DAILY CHECKS - Desktop owns the colours (daily_checks in the desktop part); this only draws them.
+const DC_OPEN = { inboxes: "email", important: "email", posts: "ads", testing: "projects", money: "money" };
+const DC_STATES = ["GREEN", "AMBER", "RED", "GREY"];
+const DC_WORD = { GREEN: "done", AMBER: "gap", RED: "NOT DONE", GREY: "not due" };
+const DC_TONE = { GREEN: "pos", AMBER: "old", RED: "neg", GREY: "" };
+const hm12 = s => { const m = /(\d\d):(\d\d)/.exec(String(s || "")); if (!m) return ""; const h = +m[1]; return (h % 12 || 12) + ":" + m[2] + (h < 12 ? " AM" : " PM"); };
+function dcData() {
+  const c = dk().daily_checks;
+  if (!c || typeof c !== "object") return { bad: "no daily checks from Desktop yet" };
+  if (c.error) return { bad: "Desktop couldn't build them: " + String(c.error) };
+  if (c.day !== todayCT()) return { bad: "last built " + (isYmd(c.day) ? dayName(c.day) : "?") + " - not today's yet" };
+  const boxes = (Array.isArray(c.boxes) ? c.boxes : []).filter(b => b && typeof b === "object" && DC_STATES.includes(b.state))
+    .slice().sort((a, z) => String(a.at || "99:99").localeCompare(String(z.at || "99:99")));
+  return boxes.length ? { boxes, built: c.built_at } : { bad: "no boxes in today's daily checks" };
+}
+function renderChecks() {
+  const el = $("#dcBand"); if (!el) return;
+  try {
+    const D = dcData();
+    if (D.bad) { el.innerHTML = `<div class="dc-head"><b>Daily checks</b><span>--</span></div><p class="dc-note">${esc(D.bad)}</p>`; return; }
+    const g = D.boxes.filter(b => b.state === "GREEN").length, t = hm12(D.built);
+    el.innerHTML = `<div class="dc-head" data-open="checks" role="button" tabindex="0"><b>Daily checks</b><span>${g} of ${D.boxes.length} green${t ? " · " + esc(t) : ""} ›</span></div>` +
+      `<div class="dc-grid">` + D.boxes.map(b => `<div class="dc-b dc-${b.state.toLowerCase()}" data-open="${esc(DC_OPEN[b.key] || "checks")}" role="button" tabindex="0">` +
+      `<b>${esc(b.title || b.key)}</b><small>${esc(b.line || "")}</small></div>`).join("") + `</div>`;
+  } catch (e) { el.innerHTML = `<p class="dc-note">Daily checks hit a snag: ${esc(e.message || e)}</p>`; }
+}
+function dcSheet() {
+  const D = dcData();
+  if (D.bad) return `<p class="note">${esc(D.bad)}</p>`;
+  return D.boxes.map(b => row(b.title || b.key, DC_WORD[b.state], (b.at ? "due " + hm12(b.at) + " · " : "") + (b.line || ""), DC_TONE[b.state])).join("") +
+    `<p class="note">Desktop decides each colour; Scott Hub only shows it. Green = done in full today · amber = done with a gap · red = failed, or due and not done · grey = not due yet.${D.built ? " Built " + esc(hm12(D.built)) + "." : ""}</p>`;
+}
+
 // v37 eBay (Scott 11/20). Typed by Claude from eBay's own pages 11/20 - change it here (and bump VERSION) when the account changes.
 const EBAY = {
   user: "usemartstore", feedback: 1013,      // public on eBay; NO sign-in email here - this file is on a public site
@@ -941,6 +980,7 @@ const SHEETS = {
   }],
   apps: ["📱 Marvel Corp Apps", shAppList, true],      // v33 (true = needs no Desktop data)
   ebay: ["🏷️ eBay", ebaySheet, true],                  // v37
+  checks: ["✅ Daily checks", dcSheet],                // v38 (needs Desktop data)
   server: ["🖥️ Server", () => {      // v32
     const C = srvChecks(), W = watchOn();
     let h = sec("Checks · " + C.src);
@@ -1306,6 +1346,7 @@ function render() {
   $("#apBubble").classList.toggle("hidden", !ap().enabled);
   $("#umBubble").classList.toggle("hidden", !umHave());
   renderBrief();
+  renderChecks();      // v38
   renderNeeds();
   renderGlance();
   renderTiles();
@@ -1317,7 +1358,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "37";   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
+const VERSION = "38";   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
