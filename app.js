@@ -67,6 +67,10 @@
  * v29 USEMART SITE LOAD (Scott 11/12 "finish what you can"; UseMart N12): the usemart part's surge numbers (this server, last 5 min) on the
  * UseMart support screen, plus a red card on the home band when the site is under strain (same limits as the server's alert email).
  * v27 mail buttons ship here too: they show only when the PC says mail_actions_on, and need relay v9 deployed.
+ * v37 eBAY (Scott 11/20: "also an ebay info box to my scott hub"): an eBay tile + sheet - the seller account (usemartstore, feedback;
+ * public facts only, never the sign-in email), the Starter Store "UseMart Finds" (price, renewal), where the developer appeal stands, buttons to the
+ * store, Seller Hub, active listings, a new listing and the subscription page. Typed by Claude into EBAY below (no eBay API - eBay denied
+ * the developer account 11/20), so it changes only with a new version; no Desktop data needed.
  * v33 MARVEL CORP APPS (Scott 11/15 in the Desktop session: "Scott hub too" -> "yes thats what i meant"): an Apps tile opening every Marvel
  * Corp phone app + UseMart - logo + short note in a list; tap one for the big QR code, the price and the pitch, to show someone. The same
  * list as UseMart's Marvel Corp Phone Apps (SH_APPS = a copy of usemart api/src/apps.ts - change it there, copy it here). The QR is drawn
@@ -841,6 +845,28 @@ function shAppPage(a) {
     <a class="shopen" href="${esc(a.url)}" target="_blank" rel="noopener">📱 Open ${esc(a.name)} ↗</a>
     ${sec("What it does")}<ul class="shfeat">${a.features.map(f => `<li>${esc(f)}</li>`).join("")}</ul>`;
 }
+// v37 eBay (Scott 11/20). Typed by Claude from eBay's own pages 11/20 - change it here (and bump VERSION) when the account changes.
+const EBAY = {
+  user: "usemartstore", feedback: 1013,      // public on eBay; NO sign-in email here - this file is on a public site
+  store: "UseMart Finds", plan: "Starter Store", price: "$7.95/mo, monthly", started: "2026-11-20", renews: "2026-12-01",
+  storeUrl: "https://www.ebay.com/str/usemartfinds",
+  dev: "Appeal sent 11/20 - one-tap List on eBay waits on eBay's answer",
+};
+function ebaySheet() {
+  const go = (label, url, sub) => `<div class="row"><div class="l">${esc(label)}${sub ? `<small>${esc(sub)}</small>` : ""}</div>` +
+    `<div class="r"><a class="chip" href="${esc(url)}" target="_blank" rel="noopener">Open ↗</a></div></div>`;
+  let h = `<a class="shopen" href="${esc(EBAY.storeUrl)}" target="_blank" rel="noopener">🏷️ Open my eBay store ↗</a>`;
+  h += sec("Account");
+  h += row("Seller", EBAY.user, "feedback score " + EBAY.feedback.toLocaleString());
+  h += row("Store", EBAY.store, EBAY.plan + " · " + EBAY.price + " · since " + dayName(EBAY.started) + " · renews " + dayName(EBAY.renews));
+  h += row("UseMart one-tap", "waiting", EBAY.dev);
+  h += sec("Go to");
+  h += go("Seller Hub", "https://www.ebay.com/sh/ovw", "orders, listings, money");
+  h += go("Active listings", "https://www.ebay.com/sh/lst/active", "what's for sale right now");
+  h += go("List an item", "https://www.ebay.com/sl/sell", "eBay's own sell page");
+  h += go("Store subscription", "https://www.ebay.com/sub/manage", "change or cancel the Starter Store");
+  return h + `<p class="note">Typed in by Claude from eBay's pages (no eBay connection yet), so these numbers change only when Claude updates Scott Hub.</p>`;
+}
 function shDrawQr(a) {
   const el = document.getElementById("shQr"); if (!el) return;
   try { if (window.QRCode) new QRCode(el, { text: a.url, width: 220, height: 220, colorDark: "#0b2b2e", colorLight: "#ffffff" }); else el.innerHTML = `<p class="note">QR code needs a connection - the Open button works.</p>`; }
@@ -914,6 +940,7 @@ const SHEETS = {
     return h;
   }],
   apps: ["📱 Marvel Corp Apps", shAppList, true],      // v33 (true = needs no Desktop data)
+  ebay: ["🏷️ eBay", ebaySheet, true],                  // v37
   server: ["🖥️ Server", () => {      // v32
     const C = srvChecks(), W = watchOn();
     let h = sec("Checks · " + C.src);
@@ -1290,7 +1317,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "36";   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
+const VERSION = "37";   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1607,6 +1634,7 @@ function tileList() {
   const hl = m.hot_list || {}, first = arr(hl.top)[0];
   add("todo", "✅", "To-do", String(hl.open_total ?? "-"), "open", "", "", first ? String(first.title).replace(/^[^A-Za-z0-9]+/u, "").replace(/\s*\(you.*$/i, "") : "");
   add("apps", "📱", "Apps", String(SH_APPS.length), "phone apps", "", "", "tap one: QR code + the pitch to show someone");      // v33
+  add("ebay", "🏷️", "eBay", EBAY.feedback.toLocaleString(), "feedback", "STORE LIVE", "pos", EBAY.store + " · " + EBAY.price.split(",")[0]);      // v37
   add("hublooks", "✨", "New looks", HUB_LOOKS.filter(h => store.get(h[0] + ".look") === "tiles").length + " of " + HUB_LOOKS.length, "on", "", "", "in my other Hubs");
   { const P = obj(mh().projects), H = obj(P.headline); if (arr(P.groups).length) add("projects", "🚀", "Projects", H.value || "Open", H.unit || "", "", "", H.sub || "Instagram · app testing · apps"); }   // v28
   if (wsHave()) {      // v30
