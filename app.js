@@ -67,6 +67,8 @@
  * v29 USEMART SITE LOAD (Scott 11/12 "finish what you can"; UseMart N12): the usemart part's surge numbers (this server, last 5 min) on the
  * UseMart support screen, plus a red card on the home band when the site is under strain (same limits as the server's alert email).
  * v27 mail buttons ship here too: they show only when the PC says mail_actions_on, and need relay v9 deployed.
+ * v39 SALES, OFFERS & BUYER QUESTIONS (Scott 11/20: "set notifications from ebay or other places to let me know on questions and sales"):
+ * Email sheet section from Desktop's mail scan (email.market) + the Email tile says "N BUYERS WAITING" while any are unopened.
  * v38 DAILY CHECKS (Scott 11/20 in the Desktop session: "spam and scrap emails gone important noted and box goes green on scott hub / ads
  * all go out goes green / all daily checks turn green as task complete", "needs to be my info hub"; "Yes, build it"): a panel under the
  * top card in BOTH looks - "Daily checks N of 9 green" + 9 boxes coloured GREEN / AMBER / RED / GREY with the title and Desktop's one-line
@@ -884,6 +886,26 @@ function dcSheet() {
     `<p class="note">Desktop decides each colour; Scott Hub only shows it. Green = done in full today · amber = done with a gap · red = failed, or due and not done · grey = not due yet.${D.built ? " Built " + esc(hm12(D.built)) + "." : ""}</p>`;
 }
 
+// v39 SALES, OFFERS & BUYER QUESTIONS (Scott 11/20: "set notifications from ebay or other places to let me know on questions and sales").
+// Desktop's mail scan sends email.market = {days, inboxes:[{inbox, platforms, status}], ebay_inbox_ok, week:{SALE,OFFER,QUESTION},
+// unread:{...}, rows:[...]}; this only shows it. Missing = nothing drawn; never a count Desktop didn't send.
+const MKT_KIND = { SALE: "sold", OFFER: "offer", QUESTION: "question" };
+const mktWaiting = m => { const u = obj(obj(m).unread); return (Number(u.SALE) || 0) + (Number(u.OFFER) || 0) + (Number(u.QUESTION) || 0); };
+function mktSection(m) {
+  if (!m || typeof m !== "object") return "";
+  const w = obj(m.week), u = obj(m.unread), rows = arr(m.rows);
+  let h = sec("🛒 Sales, offers & buyer questions · last " + (m.days ?? "?") + " days");
+  h += row("This week", (w.SALE ?? "-") + " sold · " + (w.OFFER ?? "-") + " offers · " + (w.QUESTION ?? "-") + " questions",
+           mktWaiting(m) ? mktWaiting(m) + " not opened yet" : "nothing waiting", mktWaiting(m) ? "pos" : "");
+  h += rows.map(x => row(x.subject || x.title || "(no subject)", MKT_KIND[x.kind] || String(x.kind || "").toLowerCase(),
+        [isYmd(String(x.date || "").slice(0, 10)) ? dayName(String(x.date).slice(0, 10)) : "", x.platform, x.inbox, x.unread ? "unread" : ""].filter(Boolean).join(" · "),
+        x.kind === "SALE" ? "pos" : x.unread ? "old" : "")).join("") || `<p class="note">None in the last ${esc(m.days ?? "?")} days.</p>`;
+  const off = arr(m.inboxes).filter(i => i.status && i.status !== "ok");
+  if (off.length) h += `<p class="note">Not read yet: ${off.map(i => esc(i.inbox) + " (" + esc(String(i.status).replace(/_/g, " ")) + ")").join(", ")}.` +
+    (m.ebay_inbox_ok === false ? " eBay's mail goes to usemart.net - its alerts start once that Gmail's app password is saved in Marvel Desktop Settings." : "") + `</p>`;
+  return h + `<p class="note">For a sale: ship it from eBay Seller Hub (Orders). For a question or offer: answer it in that site's own app.</p>`;
+}
+
 // v37 eBay (Scott 11/20). Typed by Claude from eBay's own pages 11/20 - change it here (and bump VERSION) when the account changes.
 const EBAY = {
   user: "usemartstore", feedback: 1013,      // public on eBay; NO sign-in email here - this file is on a public site
@@ -1140,6 +1162,7 @@ const SHEETS = {
     h += sec("💼 Recruiters & job offers · last " + em.days + " days");
     h += (em.recruiters || []).map(r => row(r.from, dayName(r.date), r.subject + " · " + r.inbox + (r.archived ? " · archived" : ""))).join("") || `<p class="note">None found.</p>`;
     h += `<p class="note">${em.job_alerts || 0} job-alert emails (LinkedIn/Indeed alerts) in the same window - counted, not listed. Archived mail is still in All Mail.</p>`;
+    h += mktSection(em.market);      // v39: eBay / Marketplace / OfferUp / Craigslist sales, offers, buyer questions (Desktop's mail scan)
     h += sec("Important mail · " + (em.important_count || 0));
     h += (em.important || []).map(x => row(x.subject, x.kind.toLowerCase(), dayName(x.date) + " · " + x.from + " · " + x.inbox + (x.unread ? " · unread" : ""), x.kind === "DUE" ? "neg" : "")).join("") || `<p class="note">Nothing important.</p>`;
     const c = em.cleanup || {};
@@ -1358,7 +1381,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "38";   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
+const VERSION = "39";   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1653,8 +1676,9 @@ function tileList() {
   const pg = arr(obj(m.pages).pages).filter(p => p && typeof p === "object"), pend = pg.reduce((s, p) => s + (Number(p.pending) || 0), 0);
   const best = pg.filter(p => obj(p.today).record && p.today.record !== "0-0").sort((a, z) => Number(z.today.units || 0) - Number(a.today.units || 0))[0];
   add("pages", "📊", "Pages", String(pend), "pending", "", "", best ? "best today: " + String(best.page || "").replace(/_/g, " ") + " " + best.today.record : pg.length + " pages");
-  const em = d.email || {}, dead = arr(em.inboxes).filter(i => i.status && i.status !== "ok").length;
-  add("email", "📧", "Email", String(em.important_count ?? "-"), "important", dead ? dead + " INBOX OFF" : "", dead ? "old" : "",
+  const em = d.email || {}, dead = arr(em.inboxes).filter(i => i.status && i.status !== "ok").length, mw = mktWaiting(em.market);   // v39
+  add("email", "📧", "Email", String(em.important_count ?? "-"), "important", mw ? mw + " BUYER" + (mw > 1 ? "S" : "") + " WAITING" : dead ? dead + " INBOX OFF" : "",
+      mw ? "pos" : dead ? "old" : "",
       (em.recruiter_count || 0) + " recruiter" + (em.recruiter_count === 1 ? "" : "s") + " · " + (em.job_alerts || 0) + " job alerts");
   const adRows = [].concat(...arr((d.ads || {}).sections).filter(s => /^ADS/i.test(s.title)).map(s => arr(s.rows))), adBad = adRows.filter(r => r.state === "FAILED").length;
   add("ads", "📣", "Ads", adRows.length ? (adRows.length - adBad) + "/" + adRows.length : "-", "ran", adRows.length ? adBad ? adBad + " FAILED" : "ALL RAN" : "", adBad ? "neg" : "pos", "yesterday's posting");
