@@ -155,6 +155,7 @@ async function load() {
   checkUpdate();                     // v21: open, resume, Refresh and the timer all look
   if (tilesOn()) loadWeather();      // v19: its own 30-min cache; never waits on the relay
   loadViews();                       // v24: its own 5-minute wait; reads the sites' counter, never the relay
+  loadTraffic();                     // v41: the traffic graph at the top - its own 5-minute wait, straight from UseMart's /api/traffic
   const pass = store.get(K_PASS);
   if (!pass) { $("#setup").classList.remove("hidden"); return; }
   try {
@@ -1331,6 +1332,7 @@ const SHEETS = {
     } else h += `<p class="note">Getting the forecast…</p>`;
     return h + `<p class="note">The town stays on this phone only. Forecast from Open-Meteo, alerts from weather.gov.</p>` + edit;
   }],
+  traffic: ["📈 Traffic", trafficSheet, true],   // v41
   views: ["👀 Site views", () => {
     const v = viewData();
     let h = "";
@@ -1385,8 +1387,73 @@ function openSheet(key) {
   if (app || key === "apps") { if (app) shDrawQr(app); const sc = $("#sheetBody").closest(".sheet-body"); if (sc) sc.scrollTop = 0; }   // a new page starts at its top
 }
 
+// v41 TRAFFIC (Scott 11/21: "can we build i traffic monitoer ... for scott hub" -> "like that lil graph to be at top" + "by place").
+// Reads UseMart's public, counts-only GET /api/traffic (build 21g+): every site's today / yesterday / live / 7 days / up-down, places,
+// sources, devices. No answer (older server, offline) = the band stays hidden; a cached copy shows with its age.
+const K_TRAFFIC = "scotthub.traffic", TR_URL = "https://usemart.net/api/traffic", TR_EVERY = 5 * 60000;
+let TR_AT = 0;
+const trData = () => { try { return JSON.parse(store.get(K_TRAFFIC) || "null"); } catch { return null; } };
+async function loadTraffic() {
+  if (Date.now() - TR_AT < TR_EVERY) return;
+  TR_AT = Date.now();
+  try {
+    const r = await fetch(TR_URL, { cache: "no-store" }); if (!r.ok) return;
+    const j = await r.json(); if (!j || !j.on || !j.totals) return;
+    store.set(K_TRAFFIC, JSON.stringify({ ...j, got_at: new Date().toISOString() }));
+    renderTraffic();
+    const s = $("#sheet"); if (s && s.dataset.key === "traffic" && !s.classList.contains("hidden")) openSheet("traffic");
+  } catch { /* offline - keep the last copy */ }
+}
+// a little line graph of a 7-day series (views); fixed size, scales to its own max
+function trSpark(days, w, h) {
+  const v = arr(days).map(d => Number(d && d.views) || 0); if (!v.length) return "";
+  const max = Math.max(1, ...v), step = v.length > 1 ? (w - 4) / (v.length - 1) : 0;
+  const pts = v.map((n, i) => `${(2 + i * step).toFixed(1)},${(h - 3 - (n / max) * (h - 6)).toFixed(1)}`).join(" ");
+  const last = pts.split(" ").pop().split(",");
+  return `<svg class="tr-spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${last[0]}" cy="${last[1]}" r="2.6" fill="currentColor"/></svg>`;
+}
+const trSiteName = s => ({ "usemart.net": "UseMart", "sitesbymarvel.com": "Sites by Marvel", "cmmgsports.com": "CMMG", hubs: "Hubs page" })[s]
+  || String(s || "").replace(/hub$/, " Hub").replace(/^./, c => c.toUpperCase()).replace("Hubuniverse", "Hub Universe").replace("Marvelmagic", "Marvel Magic");
+function renderTraffic() {
+  const el = $("#trBand"); if (!el) return;
+  try {
+    const t = trData(); if (!t || !t.totals) { el.innerHTML = ""; return; }
+    const T = t.totals, today = obj(T.today), yest = obj(T.yesterday), down = arr(T.sites_down);
+    const age = t.got_at ? Math.round((Date.now() - Date.parse(t.got_at)) / 60000) : null;
+    el.innerHTML = `<div class="tr-row" data-open="traffic" role="button" tabindex="0">` +
+      `<div class="tr-l"><b>Traffic</b><small>${esc(today.uniques ?? 0)} visitors today · ${esc(yest.uniques ?? 0)} yesterday${T.live_now ? ` · <i class="tr-live">● ${esc(T.live_now)} live</i>` : ""}</small>` +
+      (down.length ? `<small class="tr-down">⚠ down: ${down.map(trSiteName).map(esc).join(", ")}</small>` : "") + `</div>` +
+      `<div class="tr-g">${trSpark(T.days, 120, 34)}<small>7 days${age != null && age > 15 ? ` · ${age} min old` : ""}</small></div></div>`;
+  } catch (e) { el.innerHTML = `<p class="dc-note">Traffic hit a snag: ${esc(e.message || e)}</p>`; }
+}
+function trafficSheet() {
+  const t = trData(); if (!t) return `<p class="note">No traffic numbers yet - UseMart's traffic monitor (build 21g) isn't answering.</p>`;
+  const T = obj(t.totals);
+  let h = sec("All sites · today");
+  h += row("Visitors", String(obj(T.today).uniques ?? 0), "yesterday " + (obj(T.yesterday).uniques ?? 0) + " · views " + (obj(T.today).views ?? 0), "pos");
+  h += row("Live right now", String(T.live_now ?? 0), "seen in the last 5 minutes");
+  h += `<div class="tr-big">${trSpark(T.days, 300, 70)}</div>`;
+  h += sec("Each site");
+  h += arr(t.sites).map(s => {
+    const up = s.up === false ? "DOWN" : s.up === true ? "up" : "not checked";
+    return `<div class="row tr-site"><div class="l">${esc(trSiteName(s.site))}<small>${esc(obj(s.today).uniques ?? 0)} today · ${esc(obj(s.yesterday).uniques ?? 0)} yesterday${s.live_now ? " · " + esc(s.live_now) + " live" : ""}${arr(s.top_pages).length ? " · top: " + esc(s.top_pages[0].path) : ""}</small></div>` +
+      `<div class="r ${s.up === false ? "neg" : ""}">${trSpark(s.days, 70, 22)}<small>${esc(up)}</small></div></div>`;
+  }).join("");
+  const places = arr(t.places);
+  if (places.length) {
+    h += sec(t.place_detail === "country" ? "Where they are (country - city and state once Cloudflare's location setting is on)" : "Where they are");
+    h += places.map(p => row([p.city && p.city !== "(other)" ? p.city : null, p.region, p.country].filter(Boolean).join(", ") || "Unknown",
+      String(p.uniques ?? p.views ?? 0), p.city === "(other)" ? "smaller towns in that state" : "")).join("");
+  }
+  if (arr(t.sources).length) h += sec("Where they came from") + arr(t.sources).map(x => row(x.source, String(x.uniques ?? x.views ?? 0))).join("");
+  if (arr(t.devices).length) h += sec("Phone or computer") + arr(t.devices).map(x => row(x.device, String(x.uniques ?? x.views ?? 0))).join("");
+  h += `<p class="note">Counts only - no names, no addresses, no cookies. Updated every 5 minutes${t.got_at ? " · last " + esc(new Date(t.got_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })) : ""}.</p>`;
+  return h;
+}
+
 function render() {
   paintFresh();
+  renderTraffic();     // v41 - independent of the relay, so it shows even before Desktop's data loads
   renderTlHero();
   if (!DATA) { $("#needs").innerHTML = `<li class="bad">Can't load yet${LAST_ERR ? `<small>${esc(LAST_ERR)}</small>` : ""}</li>`; return; }
   $("#apBubble").classList.toggle("hidden", !ap().enabled);
@@ -1405,7 +1472,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "40";   // v40 11/21: "This week" scoreboard band - one number per team (Scott "yes sir lets take what makes sense")   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
+const VERSION = "41";   // v41 11/21: traffic graph at the top + Traffic sheet (Scott "like that lil graph to be at top", "by place")   // v40 11/21: "This week" scoreboard band - one number per team (Scott "yes sir lets take what makes sense")   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
