@@ -206,6 +206,13 @@ body.tl .needs li.more { padding: 6px 12px; font-size: 13px; }
 .dc-b:active { transform: scale(.98); }
 .dc-b b { display: block; font-size: 12.5px; line-height: 1.2; }
 .dc-b small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 11px; line-height: 1.25; margin-top: 3px; opacity: .92; }
+/* v40 scoreboard - one big number per team */
+.sb-band:empty { display: none; }
+.sb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 7px; }
+.sb-t { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; min-width: 0; }
+.sb-n { display: inline-block; font-size: 28px; line-height: 1; margin-right: 6px; }
+.sb-l { font-weight: 700; font-size: 13px; }
+.sb-t small { display: block; margin-top: 4px; font-size: 11.5px; line-height: 1.3; color: var(--muted); overflow-wrap: anywhere; }
 .dc-green { background: #16a34a; color: #fff; }
 .dc-amber { background: #f59e0b; color: #1a1000; }
 .dc-red { background: #dc2626; color: #fff; }

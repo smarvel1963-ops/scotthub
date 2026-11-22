@@ -868,6 +868,29 @@ function dcData() {
     .slice().sort((a, z) => String(a.at || "99:99").localeCompare(String(z.at || "99:99")));
   return boxes.length ? { boxes, built: c.built_at } : { bad: "no boxes in today's daily checks" };
 }
+// v40 SCOREBOARD (Scott 11/21: "yes sir lets take what makes sense" - one number per team that shows it's helping). Desktop forwards
+// dk().scoreboard: one team {team, headline:{label,value}, last_week:{...}, ...} or a list of them. This only draws what came; no key =
+// no band. The UseMart + eBay team's number = items sold this week (PC eBay sync's scoreboard.json).
+function renderScore() {
+  const el = $("#sbBand"); if (!el) return;
+  try {
+    const raw = dk().scoreboard; const teams = (Array.isArray(raw) ? raw : raw ? [raw] : []).filter(t => t && typeof t === "object" && t.headline);
+    if (!teams.length) { el.innerHTML = ""; return; }
+    const sub = t => {
+      const bits = [];
+      if (t.last_week && t.last_week.sold != null && t.headline && /sold/i.test(String(t.headline.label))) bits.push("last week " + esc(t.last_week.sold));
+      if (t.listed_this_week != null) bits.push(esc(t.listed_this_week) + " listed");
+      if (t.live_on_ebay != null) bits.push(esc(t.live_on_ebay) + " live on eBay");
+      if (t.to_ship) bits.push(esc(t.to_ship) + " to ship");
+      if (t.too_high_waiting) bits.push(esc(t.too_high_waiting) + " price notes");
+      if (t.line) bits.push(esc(t.line));
+      return bits.join(" · ");
+    };
+    el.innerHTML = `<div class="dc-head"><b>This week</b><span>${esc(teams[0].week_of ? "since " + dayName(teams[0].week_of) : "")}</span></div>` +
+      `<div class="sb-grid">` + teams.map(t => `<div class="sb-t"><b class="sb-n">${esc(t.headline.value ?? "-")}</b>` +
+      `<span class="sb-l">${esc(t.headline.label || "")}</span><small>${esc(t.team || "")}${sub(t) ? " · " + sub(t) : ""}</small></div>`).join("") + `</div>`;
+  } catch (e) { el.innerHTML = `<p class="dc-note">Scoreboard hit a snag: ${esc(e.message || e)}</p>`; }
+}
 function renderChecks() {
   const el = $("#dcBand"); if (!el) return;
   try {
@@ -1370,6 +1393,7 @@ function render() {
   $("#umBubble").classList.toggle("hidden", !umHave());
   renderBrief();
   renderChecks();      // v38
+  renderScore();       // v40
   renderNeeds();
   renderGlance();
   renderTiles();
@@ -1381,7 +1405,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "39";   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
+const VERSION = "40";   // v40 11/21: "This week" scoreboard band - one number per team (Scott "yes sir lets take what makes sense")   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
