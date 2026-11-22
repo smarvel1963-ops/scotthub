@@ -1027,6 +1027,7 @@ const SHEETS = {
   apps: ["📱 Marvel Corp Apps", shAppList, true],      // v33 (true = needs no Desktop data)
   ebay: ["🏷️ eBay", ebaySheet, true],                  // v37
   checks: ["✅ Daily checks", dcSheet],                // v38 (needs Desktop data)
+  sites: ["🌐 Sites & services", stSheet],             // v42 (needs Desktop data)
   server: ["🖥️ Server", () => {      // v32
     const C = srvChecks(), W = watchOn();
     let h = sec("Checks · " + C.src);
@@ -1401,6 +1402,7 @@ async function loadTraffic() {
     const j = await r.json(); if (!j || !j.on || !j.totals) return;
     store.set(K_TRAFFIC, JSON.stringify({ ...j, got_at: new Date().toISOString() }));
     renderTraffic();
+    renderGraphs();   // v42: the visitors-by-site card
     const s = $("#sheet"); if (s && s.dataset.key === "traffic" && !s.classList.contains("hidden")) openSheet("traffic");
   } catch { /* offline - keep the last copy */ }
 }
@@ -1451,15 +1453,137 @@ function trafficSheet() {
   return h;
 }
 
+// v42 SITES & SERVICES + TOP GRAPHS (Scott 11/22 via Desktop: "we need to have scott hub also track up and down sites like we use data
+// mart backblaze cloud flair all our apps and sites everything and the boxed that lite up status is awesoem" -> "Yes, build it i want a
+// few more graphs at top and the square devided by improtance nd group they blong in").
+// Desktop's site_watch.py checks every site + service every 30 min and sends dk().sites = {at, every_min, counts, importance,
+// groups:[{key,title,boxes:[{k,n,i,s,l,u}]}], graphs:{t,up,warn,down,speed_ms:{usemart,scotthub,hubs}}}. Groups and boxes come already
+// in Scott's order (importance first). Desktop decides every colour; Scott Hub only draws what came - no key = nothing drawn.
+const ST_WORD = { GREEN: "up", AMBER: "slow / re-checking", RED: "DOWN", GREY: "can't tell" };
+const ST_TONE = { GREEN: "pos", AMBER: "old", RED: "neg", GREY: "" };
+const ST_IMP = { 1: "critical", 2: "important", 3: "good to know" };
+const ST_SPEED = [["usemart", "UseMart", "gx-s1"], ["scotthub", "Scott Hub", "gx-s2"], ["hubs", "Hubs page", "gx-s3"]];
+function stData() {
+  const s = dk().sites;
+  if (!s || typeof s !== "object" || !Array.isArray(s.groups)) return null;
+  const groups = s.groups.filter(g => g && typeof g === "object" && Array.isArray(g.boxes))
+    .map(g => ({ ...g, boxes: g.boxes.filter(b => b && typeof b === "object" && DC_STATES.includes(b.s)) })).filter(g => g.boxes.length);
+  if (!groups.length) return null;
+  const all = groups.flatMap(g => g.boxes);
+  const t = Date.parse(s.at), age = isNaN(t) ? null : Math.round((Date.now() - t) / 60000);
+  return { ...s, groups, all, age, stale: age != null && age > (Number(s.every_min) || 30) * 2.5 };
+}
+const stUp = b => b.u == null || b.u === "" ? "" : `${Math.round(Number(b.u) * 10) / 10}% up 24h`;
+// problems over the last 24 h: a green line when every check passed, amber + red bars for slow and down (scaled to at least 3)
+function gxProblems(g, w, h) {
+  const n = Math.min(arr(g && g.t).length, arr(g && g.warn).length, arr(g && g.down).length); if (!n) return "";
+  const warn = g.warn.slice(-n).map(x => Number(x) || 0), down = g.down.slice(-n).map(x => Number(x) || 0);
+  const max = Math.max(3, ...warn.map((x, i) => x + down[i])), base = h - 4, room = h - 8, bw = (w - 4) / n;
+  let s = `<line x1="2" y1="${base + 2}" x2="${w - 2}" y2="${base + 2}" stroke="#16a34a" stroke-width="3" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
+  for (let i = 0; i < n; i++) {
+    const x = (2 + i * bw + bw * 0.18).toFixed(1), bwi = Math.max(1, bw * 0.64).toFixed(1), dh = down[i] / max * room, wh = warn[i] / max * room;
+    if (dh) s += `<rect x="${x}" y="${(base - dh).toFixed(1)}" width="${bwi}" height="${dh.toFixed(1)}" rx="1" fill="#dc2626"/>`;
+    if (wh) s += `<rect x="${x}" y="${(base - dh - wh).toFixed(1)}" width="${bwi}" height="${wh.toFixed(1)}" rx="1" fill="#f59e0b"/>`;
+  }
+  return `<svg class="gx-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">${s}</svg>`;
+}
+// page speed: one line per site (ms), all on the same scale
+function gxSpeed(g, w, h) {
+  const sp = obj(g && g.speed_ms), series = ST_SPEED.map(([k, , c]) => [arr(sp[k]).map(v => (v == null || v === "" ? null : Number(v))), c]).filter(([v]) => v.some(x => x != null));
+  if (!series.length) return "";
+  const max = Math.max(100, ...series.flatMap(([v]) => v.filter(x => x != null)));
+  const lines = series.map(([v, c]) => {
+    const step = v.length > 1 ? (w - 4) / (v.length - 1) : 0;
+    const pts = v.map((x, i) => x == null ? null : `${(2 + i * step).toFixed(1)},${(h - 3 - (x / max) * (h - 6)).toFixed(1)}`).filter(Boolean).join(" ");
+    return `<polyline class="${c}" points="${pts}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
+  }).join("");
+  return `<svg class="gx-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">${lines}</svg>`;
+}
+const gxLast = v => { const a = arr(v).filter(x => x != null && x !== ""); return a.length ? Number(a[a.length - 1]) : null; };
+function gxSpeedKey(g) {
+  const sp = obj(g && g.speed_ms);
+  return ST_SPEED.map(([k, label, c]) => { const l = gxLast(sp[k]); return l == null ? "" : `<i class="${c}">●</i> ${esc(label)} ${esc(Math.round(l))} ms`; }).filter(Boolean).join(" · ");
+}
+// today's visitors per site, as short bars (from the v41 traffic numbers)
+function gxBySite(t, max = 5) {
+  const rows = arr(t && t.sites).map(s => [trSiteName(s.site), Number(obj(s.today).uniques) || 0]).filter(([, n]) => n > 0).sort((a, z) => z[1] - a[1]).slice(0, max);
+  if (!rows.length) return "";
+  const top = Math.max(...rows.map(r => r[1]));
+  return rows.map(([n, v]) => `<div class="gx-bar"><span>${esc(n)}</span><i style="width:${Math.max(4, Math.round(v / top * 100))}%"></i><b>${esc(v)}</b></div>`).join("");
+}
+function renderGraphs() {
+  const el = $("#gxBand"); if (!el) return;
+  try {
+    const S = stData(), G = S ? obj(S.graphs) : null, T = trData();
+    const cards = [];
+    if (S) {
+      const total = S.all.length, up = S.all.filter(b => b.s === "GREEN").length;
+      const bad = S.all.filter(b => b.s === "RED"), slow = S.all.filter(b => b.s === "AMBER");
+      cards.push(`<div class="gx-c gx-wide" data-open="sites" role="button" tabindex="0"><div class="gx-h"><b>Sites up</b><span class="${bad.length ? "neg" : slow.length ? "old" : "pos"}">${esc(up)} of ${esc(total)}</span></div>` +
+        (G && G.t ? gxProblems(G, 300, 46) : "") +
+        `<small>${bad.length ? "⚠ down: " + bad.map(b => esc(b.n)).join(", ") + " · " : ""}${slow.length ? esc(slow.length) + " slow or checking · " : ""}${G && arr(G.t).length ? "last 24 h" : "graph starts with the next checks"}${S.stale ? ` · ${esc(S.age)} min old` : ""}</small></div>`);
+      if (G && G.speed_ms) {
+        const sv = gxSpeed(G, 150, 46);
+        if (sv) cards.push(`<div class="gx-c" data-open="sites" role="button" tabindex="0"><div class="gx-h"><b>Page speed</b><span>24 h</span></div>${sv}<small class="gx-key">${gxSpeedKey(G)}</small></div>`);
+      }
+    }
+    const bs = gxBySite(T);
+    if (bs) cards.push(`<div class="gx-c" data-open="traffic" role="button" tabindex="0"><div class="gx-h"><b>Visitors today</b><span>by site</span></div>${bs}</div>`);
+    el.innerHTML = cards.length ? `<div class="gx-grid">${cards.join("")}</div>` : "";
+  } catch (e) { el.innerHTML = `<p class="dc-note">Graphs hit a snag: ${esc(e.message || e)}</p>`; }
+}
+function stBox(b) {
+  return `<div class="st-b dc-${b.s.toLowerCase()}" data-open="sites" role="button" tabindex="0" title="${esc((b.n || b.k) + " - " + (ST_WORD[b.s] || "") + (b.l ? " - " + b.l : ""))}">` +
+    `<b>${b.i === 1 ? "★ " : ""}${esc(b.n || b.k)}</b>${b.i === 3 ? "" : `<small>${esc(b.l || ST_WORD[b.s] || "")}</small>`}` +
+    (b.i === 1 && stUp(b) ? `<small class="st-u">${esc(stUp(b))}</small>` : "") + `</div>`;
+}
+function renderSites() {
+  const el = $("#stBand"); if (!el) return;
+  try {
+    const S = stData();
+    if (!S) { el.innerHTML = dk().sites ? `<div class="dc-head"><b>Sites &amp; services</b><span>--</span></div><p class="dc-note">No boxes in Desktop's site checks yet.</p>` : ""; return; }
+    const up = S.all.filter(b => b.s === "GREEN").length, t = hm12(S.at);
+    const trouble = S.all.filter(b => b.s === "RED" || b.s === "AMBER");
+    let h = `<div class="dc-head" data-open="sites" role="button" tabindex="0"><b>Sites &amp; services</b><span>${esc(up)} of ${esc(S.all.length)} up${t ? " · " + esc(t) : ""} ›</span></div>`;
+    if (S.stale) h += `<p class="dc-note st-stale">Last checked ${esc(S.age)} min ago - the PC that runs the checks may be off, so these colours are from then.</p>`;
+    if (trouble.length) h += `<p class="st-trouble">${trouble.map(b => `<span class="${b.s === "RED" ? "neg" : "old"}">${b.s === "RED" ? "✗" : "!"} ${esc(b.n)}${b.l ? ": " + esc(b.l) : ""}</span>`).join("")}</p>`;
+    h += S.groups.map(g => {
+      const gu = g.boxes.filter(b => b.s === "GREEN").length;
+      const tiers = [1, 2, 3].map(i => g.boxes.filter(b => (Number(b.i) || 3) === i)).map((bx, n) => bx.length ? `<div class="st-grid st-c${n + 1}">${bx.map(stBox).join("")}</div>` : "").join("");
+      return `<div class="st-g"><div class="st-gt"><b>${esc(g.title || g.key)}</b><span class="${gu === g.boxes.length ? "pos" : "old"}">${esc(gu)} of ${esc(g.boxes.length)} up</span></div>${tiers}</div>`;
+    }).join("");
+    h += `<p class="dc-note st-legend">★ big = critical · medium = important · small = good to know. Green up · amber slow, re-checking or the company reports trouble · red down · grey can't tell.</p>`;
+    el.innerHTML = h;
+  } catch (e) { el.innerHTML = `<p class="dc-note">Sites hit a snag: ${esc(e.message || e)}</p>`; }
+}
+function stSheet() {
+  const S = stData();
+  if (!S) return `<p class="note">No site checks from Desktop yet.</p>`;
+  const G = obj(S.graphs);
+  let h = sec("Last 24 hours");
+  if (arr(G.t).length) {
+    h += `<div class="gx-big"><small>Problems per check (amber slow · red down; a flat green line = all up)</small>${gxProblems(G, 300, 70)}</div>`;
+    const sv = gxSpeed(G, 300, 70);
+    if (sv) h += `<div class="gx-big"><small>Page speed (time to answer)</small>${sv}<small class="gx-key">${gxSpeedKey(G)}</small></div>`;
+    h += `<p class="note">${esc(arr(G.t)[0] ? hm12(arr(G.t)[0]) : "")} to ${esc(hm12(arr(G.t)[arr(G.t).length - 1]))} · ${esc(arr(G.t).length)} checks.</p>`;
+  } else h += `<p class="note">The graphs fill in as the checks run (every ${esc(S.every_min || 30)} minutes).</p>`;
+  h += S.groups.map(g => sec(g.title || g.key) + g.boxes.map(b => row((b.i === 1 ? "★ " : "") + (b.n || b.k), ST_WORD[b.s] || b.s,
+    [b.l, stUp(b), ST_IMP[b.i]].filter(Boolean).join(" · "), ST_TONE[b.s])).join("")).join("");
+  h += `<p class="note">Desktop checks every ${esc(S.every_min || 30)} minutes and decides each colour; Scott Hub only shows it. Checked ${esc(hm12(S.at) || "?")}${S.stale ? " (" + esc(S.age) + " min ago)" : ""}.</p>`;
+  return h;
+}
+
 function render() {
   paintFresh();
   renderTraffic();     // v41 - independent of the relay, so it shows even before Desktop's data loads
+  renderGraphs();      // v42 - top graphs (sites up, page speed, visitors by site)
   renderTlHero();
   if (!DATA) { $("#needs").innerHTML = `<li class="bad">Can't load yet${LAST_ERR ? `<small>${esc(LAST_ERR)}</small>` : ""}</li>`; return; }
   $("#apBubble").classList.toggle("hidden", !ap().enabled);
   $("#umBubble").classList.toggle("hidden", !umHave());
   renderBrief();
   renderChecks();      // v38
+  renderSites();       // v42
   renderScore();       // v40
   renderNeeds();
   renderGlance();
@@ -1472,7 +1596,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "41";   // v41 11/21: traffic graph at the top + Traffic sheet (Scott "like that lil graph to be at top", "by place")   // v40 11/21: "This week" scoreboard band - one number per team (Scott "yes sir lets take what makes sense")   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
+const VERSION = "42";   // v42 11/22: Sites & services boxes by group + importance, and top graphs (sites up, page speed, visitors by site) (Scott via Desktop: "Yes, build it i want a few more graphs at top and the square devided by improtance nd group they blong in")   // v41 11/21: traffic graph at the top + Traffic sheet (Scott "like that lil graph to be at top", "by place")   // v40 11/21: "This week" scoreboard band - one number per team (Scott "yes sir lets take what makes sense")   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
