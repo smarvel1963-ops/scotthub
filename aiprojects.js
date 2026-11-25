@@ -8,6 +8,13 @@
  *     one-line note, which shows under it here. Scott can tick one done himself or take a waiting one off.
  *   - "All the time": the list re-reads every 2 minutes while Scott Hub is on screen and every time it comes back to the front.
  *     The Claude tile on the front screen shows waiting / being built / done today.
+ * v45 WORKS WITH DAY HUB (Scott 11/24: "did you look at all the todo list items ... from day hub" -> "i would like them to work together"):
+ *   Scott Hub and Day Hub share one web address, so on the same phone + browser Scott Hub reads Day Hub's own saved data (dayhub.v1).
+ *   - "Your Day Hub to-dos": every open one-time to-do, each with 🤖 Send, plus Send all. One to-do = one job (the list never adds the
+ *     same todoId twice).
+ *   - When Claude finishes a job that came from a Day Hub to-do, the to-do is ticked in Day Hub too (the note is kept on it; Scott Hub shows it), and Day Hub's
+ *     backup is marked to run on its next open. A to-do Scott ticks in Day Hub marks its job done on the list.
+ *   - Repeating to-dos (meds, trash night) are never offered. Day Hub's code is not changed; only its saved to-dos are read/ticked.
  * Every value from the cloud is escaped where it's drawn (esc from app.js). Tests: window.__AIP_FAKE = { user, token } skips Google,
  * window.AIP_URL points elsewhere.
  */
@@ -78,6 +85,7 @@ async function aipPull() {
     AIP.items = Array.isArray(j.items) ? j.items : [];
     AIP.loaded = true; AIP.err = ""; AIP.at = Date.now();
     try { localStorage.setItem(K_AIP, JSON.stringify({ items: AIP.items, at: AIP.at })); } catch (e) { /* full */ }
+    await dhSync();
   } catch (e) {
     AIP.ready = true;
     AIP.err = (e && e.message) || String(e);
@@ -85,6 +93,53 @@ async function aipPull() {
     AIP.busy = false;
     aipRedraw();
   }
+}
+
+// ---------------------------------------------------------------- v45 Day Hub bridge (same phone, same browser)
+const DH_KEY = "dayhub.v1";
+const dhDay = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };   // Day Hub's own "today" (local)
+function dhRead() { try { const raw = localStorage.getItem(DH_KEY); if (!raw) return null; const S = JSON.parse(raw); return S && Array.isArray(S.todos) ? S : null; } catch (e) { return null; } }
+function dhWrite(S) { try { S.updatedAt = new Date().toISOString(); if (S.sync && S.sync.on) S.sync.dirty = true; localStorage.setItem(DH_KEY, JSON.stringify(S)); return true; } catch (e) { return false; } }
+const dhRep = t => t.rep && t.rep !== "none";
+/** Open one-time Day Hub to-dos not on Claude's list yet. null = no Day Hub in this browser. */
+function dhOpen() {
+  const S = dhRead(); if (!S) return null;
+  const on = new Set(AIP.items.map(x => x.todoId).filter(Boolean));
+  return S.todos.filter(t => t && t.id && t.title && !dhRep(t) && !t.done && !on.has(t.id));
+}
+/** Claude done -> tick the Day Hub to-do (+ note). Scott ticked it in Day Hub -> the job is done on the list. */
+async function dhSync() {
+  const S = dhRead(); if (!S) return;
+  let changed = false;
+  for (const it of AIP.items) {
+    if (!it.todoId) continue;
+    const t = S.todos.find(x => x && x.id === it.todoId); if (!t || dhRep(t)) continue;
+    if (t.aiId !== it.id) { t.aiId = it.id; changed = true; }
+    if ((it.reply || "") !== (t.aiReply || "")) { t.aiReply = it.reply || ""; changed = true; }
+    if (it.status === "done" && !t.done) { t.done = true; t.doneDay = dhDay(); changed = true; }
+    else if (t.done && (it.status === "waiting" || it.status === "working")) {
+      try { const r = await aipCall("PATCH", `/v1/projects/${it.id}`, { status: "done" }); Object.assign(it, r.item || {}); } catch (e) { /* next time */ }
+    }
+  }
+  if (changed) dhWrite(S);
+}
+async function dhSend(ids) {
+  const S = dhRead(); if (!S) return 0;
+  let n = 0;
+  for (const id of ids) {
+    const t = S.todos.find(x => x && x.id === id); if (!t) continue;
+    try { await aipCall("POST", "/v1/projects", { title: String(t.title).slice(0, 200), notes: "From Day Hub", todoId: t.id }); n++; } catch (e) { AIP.msg = (e && e.message) || "Couldn't reach Claude's list"; break; }
+  }
+  return n;
+}
+function dhSection() {
+  const open = dhOpen();
+  if (open === null) return `<p class="note">📥 Day Hub to-dos: no Day Hub found in this browser on this phone. Open Day Hub once in this same browser and its to-dos show here.</p>`;
+  if (!open.length) return `<p class="note">📥 Day Hub to-dos: nothing new to send - every open one-time to-do is already on the list.</p>`;
+  return `<details class="dh-box"${AIP.dhOpen ? " open" : ""}><summary data-dhtoggle="1">📥 Your Day Hub to-dos (${open.length}) - send to Claude</summary>
+    <button class="pay" data-dhall="1">🤖 Send all ${open.length}</button>
+    <ul class="aip-list">${open.slice(0, 60).map(t => `<li class="aip-row"><span class="aip-main"><b>${esc(t.title)}</b></span><span class="aip-acts"><button class="chip" data-dhsend="${esc(t.id)}">🤖 Send</button></span></li>`).join("")}</ul>
+    <p class="note">When Claude finishes one, it's ticked in Day Hub too. Claude's note shows here.</p></details>`;
 }
 
 // ---------------------------------------------------------------- counts (front-screen tile)
@@ -120,7 +175,7 @@ function aipSection() {
   if (AIP.err) h += `<p class="note warn">${esc(AIP.err)}${AIP.at ? " - showing the list from " + esc(aipWhen(AIP.at)) : ""}</p>`;
   if (AIP.msg) h += `<p class="note">${esc(AIP.msg)}</p>`;
   h += `<form class="aip-new" data-aipform="1"><input name="t" placeholder="New job for Claude" maxlength="200" autocomplete="off" required aria-label="New job for Claude">
-    <textarea name="n" rows="2" maxlength="2000" placeholder="Details (optional)" aria-label="Details"></textarea><button class="pay" type="submit">＋ Add for Claude</button></form>`;
+    <textarea name="n" rows="2" maxlength="2000" placeholder="Details (optional)" aria-label="Details"></textarea><button class="pay" type="submit">＋ Add for Claude</button></form>` + dhSection();
   if (working.length) h += `<h4 class="aip-h">Being built</h4><ul class="aip-list">${working.map(aipRow).join("")}</ul>`;
   if (waiting.length) h += `<h4 class="aip-h">Waiting for Claude</h4><ul class="aip-list">${waiting.map(aipRow).join("")}</ul>`;
   if (done.length) h += `<h4 class="aip-h">Done</h4><ul class="aip-list">${done.map(aipRow).join("")}</ul>`;
@@ -148,6 +203,16 @@ document.addEventListener("click", async e => {
   b.disabled = true;
   try { await aipCall("PATCH", `/v1/projects/${id}`, { status: b.dataset.aipdone ? "done" : "dropped" }); await aipPull(); }
   catch (er) { AIP.msg = "Couldn't reach Claude's list - try again"; aipRedraw(); }
+});
+document.addEventListener("click", async e => {     // v45 Day Hub to-dos
+  const b = e.target.closest("[data-dhsend],[data-dhall],[data-dhtoggle]");
+  if (!b) return;
+  if (b.dataset.dhtoggle) { AIP.dhOpen = !AIP.dhOpen; return; }
+  AIP.msg = ""; b.disabled = true;
+  const ids = b.dataset.dhall ? (dhOpen() || []).map(t => t.id) : [b.dataset.dhsend];
+  const n = await dhSend(ids);
+  if (n) AIP.msg = `🤖 ${n} Day Hub to-do${n === 1 ? "" : "s"} on Claude's list ✓`;
+  await aipPull();
 });
 document.addEventListener("submit", async e => {
   const f = e.target.closest("[data-aipform]");

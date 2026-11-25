@@ -308,3 +308,10 @@ button.chip { font: inherit; cursor: pointer; }
 .iv-r { display: flex; gap: 12px; text-align: right; }
 .iv-r b { font-size: 15px; }
 @media (max-width: 360px) { .iv-r { gap: 8px; } .iv-r b { font-size: 14px; } }
+
+/* v45 Day Hub to-dos on the Claude sheet */
+.dh-box { margin: 4px 0 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
+.dh-box summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.dh-box .pay { margin: 8px 0 4px; }
+.dh-box .aip-row { align-items: center; }
+.dh-box .aip-acts { margin-top: 0; }
