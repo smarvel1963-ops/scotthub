@@ -56,6 +56,7 @@
  * v23 TALK TO CLAUDE + IDEA BOX (Scott 11/04: "i need to be able to communicate back and forth with you on scott hub" / "i have idea outside of
  * the office all the time" / "yes build both"): a tile that opens his Claude session (Claude Code's own Remote Control runs it on the PC; nothing here
  * can reach the PC), and a box for ideas. An idea is kept on this phone until the relay holds it, so no signal or a PC that's off loses nothing.
+ * v44 USEMART ITEM VIEWS (Scott 11/24): today / yesterday / 7 days / all time under the traffic graph at the top (ivHtml).
  * v43 CLAUDE'S LIST (Scott 11/24: "move my list to scott hub that app shouls communicate with ai all the time"): Scott's build list
  * for Claude moved here from Day Hub - aiprojects.js draws it at the top of the Claude sheet and keeps it current every 2 minutes.
  * v24 VIEWS (Scott 11/04: "need 3 squares to track view on my 3 sites"): UseMart, Sites by Marvel and the CMMG site, from UseMart's public visitor counter
@@ -1428,8 +1429,16 @@ function renderTraffic() {
     el.innerHTML = `<div class="tr-row" data-open="traffic" role="button" tabindex="0">` +
       `<div class="tr-l"><b>Traffic</b><small>${esc(today.uniques ?? 0)} visitors today · ${esc(yest.uniques ?? 0)} yesterday${T.live_now ? ` · <i class="tr-live">● ${esc(T.live_now)} live</i>` : ""}</small>` +
       (down.length ? `<small class="tr-down">⚠ down: ${down.map(trSiteName).map(esc).join(", ")}</small>` : "") + `</div>` +
-      `<div class="tr-g">${trSpark(T.days, 120, 34)}<small>7 days${age != null && age > 15 ? ` · ${age} min old` : ""}</small></div></div>`;
+      `<div class="tr-g">${trSpark(T.days, 120, 34)}<small>7 days${age != null && age > 15 ? ` · ${age} min old` : ""}</small></div></div>` + ivHtml(t);
   } catch (e) { el.innerHTML = `<p class="dc-note">Traffic hit a snag: ${esc(e.message || e)}</p>`; }
+}
+// v44 USEMART ITEM VIEWS (Scott 11/24: "also want a count at top scott hub usemart item views"): views of UseMart item pages, from the same
+// public counts feed (usemart.net/api/traffic item_views, build 24b: totals only, never which item). A server before 24b sends none -> no row.
+function ivHtml(t) {
+  const iv = t && t.item_views; if (!iv || typeof iv !== "object") return "";
+  const n = v => Number(v || 0).toLocaleString("en-US");
+  return `<div class="iv-row" data-open="traffic" role="button" tabindex="0"><span class="iv-ic">🛒</span><div class="iv-l"><b>${n(iv.today)}</b><small>UseMart item views today</small></div>` +
+    `<div class="iv-r"><span><b>${n(iv.yesterday)}</b><small>yesterday</small></span><span><b>${n(iv.days7)}</b><small>7 days</small></span><span><b>${n(iv.all_time)}</b><small>all time</small></span></div></div>`;
 }
 function trafficSheet() {
   const t = trData(); if (!t) return `<p class="note">No traffic numbers yet - UseMart's traffic monitor (build 21g) isn't answering.</p>`;
@@ -1438,6 +1447,10 @@ function trafficSheet() {
   h += row("Visitors", String(obj(T.today).uniques ?? 0), "yesterday " + (obj(T.yesterday).uniques ?? 0) + " · views " + (obj(T.today).views ?? 0), "pos");
   h += row("Live right now", String(T.live_now ?? 0), "seen in the last 5 minutes");
   h += `<div class="tr-big">${trSpark(T.days, 300, 70)}</div>`;
+  const iv = t.item_views; if (iv && typeof iv === "object") {
+    h += sec("🛒 UseMart item views");
+    h += row("Today", String(iv.today ?? 0), "yesterday " + (iv.yesterday ?? 0), "pos") + row("Last 7 days", String(iv.days7 ?? 0)) + row("All time", String(iv.all_time ?? 0), "every item page ever opened, the seller's own looks not counted");
+  }
   h += sec("Each site");
   h += arr(t.sites).map(s => {
     const up = s.up === false ? "DOWN" : s.up === true ? "up" : "not checked";
@@ -1599,7 +1612,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "42";   // v42 11/22: Sites & services boxes by group + importance, and top graphs (sites up, page speed, visitors by site) (Scott via Desktop: "Yes, build it i want a few more graphs at top and the square devided by improtance nd group they blong in")   // v41 11/21: traffic graph at the top + Traffic sheet (Scott "like that lil graph to be at top", "by place")   // v40 11/21: "This week" scoreboard band - one number per team (Scott "yes sir lets take what makes sense")   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
+const VERSION = "44";   // v44 11/24: a mic at the right end of every typing box (/dayhub/voicefill.js; Scott "all aps must have microphone to right on any box") - also fixes v43, which left this at 42   // v42 11/22: Sites & services boxes by group + importance, and top graphs (sites up, page speed, visitors by site) (Scott via Desktop: "Yes, build it i want a few more graphs at top and the square devided by improtance nd group they blong in")   // v41 11/21: traffic graph at the top + Traffic sheet (Scott "like that lil graph to be at top", "by place")   // v40 11/21: "This week" scoreboard band - one number per team (Scott "yes sir lets take what makes sense")   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

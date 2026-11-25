@@ -298,3 +298,13 @@ body.tl .needs li.more { padding: 6px 12px; font-size: 13px; }
 button.chip { font: inherit; cursor: pointer; }
 .chip.armed { background: var(--warn); color: #1a1000; }
 .note.warn { color: var(--warn); }
+
+/* v44 UseMart item views, under the traffic graph */
+.iv-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); cursor: pointer; }
+.iv-ic { font-size: 22px; }
+.iv-l { flex: 1; min-width: 0; }
+.iv-l b { font-size: 24px; line-height: 1; }
+.iv-row small { display: block; color: var(--muted); font-size: 12px; }
+.iv-r { display: flex; gap: 12px; text-align: right; }
+.iv-r b { font-size: 15px; }
+@media (max-width: 360px) { .iv-r { gap: 8px; } .iv-r b { font-size: 14px; } }
