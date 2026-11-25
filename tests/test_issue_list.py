@@ -44,7 +44,8 @@ MH_BAD = {
     "generated_at": iso(now),
     "bets": {"today": {"record": "2-1", "units": 1.2}, "week": {}, "top5": {},
              "slate": [{"sport": "NBA", "game": "Lakers @ Celtics", "bet": "Under 221.5", "start": iso(now - datetime.timedelta(hours=7)), "result": ""},
-                       {"sport": "NHL", "game": "Stars @ Blues", "bet": "Over 6", "start": iso(now - datetime.timedelta(hours=9)), "result": "WIN"}]},
+                       {"sport": "NHL", "game": "Stars @ Blues", "bet": "Over 6", "start": iso(now - datetime.timedelta(hours=9)), "result": "WIN"},
+                       {"sport": "NBA", "game": "Bulls @ Heat", "bet": "Over 230", "start": iso(now + datetime.timedelta(hours=3)), "result": ""}]},   # v47: a game still to come
     "health": {"pc": {"active": True, "heartbeat_age_min": 1},
                "server": {"alive": True, "heartbeat_age_min": 2, "bots": {"athena_bot": True, "professor_bot": False}},
                "alerts": [{"title": "Odds pool dry", "severity": "FAIL", "detail": "no credits left"},
@@ -185,6 +186,7 @@ with sync_playwright() as p:
     close(pg)
 
     # Games
+    check("v47: a game waiting on a grade turns Games amber even with another game next", "TO GRADE" in tile(pg, "games").inner_text(), tile(pg, "games").inner_text())
     tile(pg, "games").click(); pg.wait_for_timeout(200)
     r = rows(pg)
     check("Games lists only the game waiting on a grade", len(r) == 1 and "Lakers @ Celtics" in r[0], str(r))
