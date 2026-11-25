@@ -56,6 +56,8 @@
  * v23 TALK TO CLAUDE + IDEA BOX (Scott 11/04: "i need to be able to communicate back and forth with you on scott hub" / "i have idea outside of
  * the office all the time" / "yes build both"): a tile that opens his Claude session (Claude Code's own Remote Control runs it on the PC; nothing here
  * can reach the PC), and a box for ideas. An idea is kept on this phone until the relay holds it, so no signal or a PC that's off loses nothing.
+ * v43 CLAUDE'S LIST (Scott 11/24: "move my list to scott hub that app shouls communicate with ai all the time"): Scott's build list
+ * for Claude moved here from Day Hub - aiprojects.js draws it at the top of the Claude sheet and keeps it current every 2 minutes.
  * v24 VIEWS (Scott 11/04: "need 3 squares to track view on my 3 sites"): UseMart, Sites by Marvel and the CMMG site, from UseMart's public visitor counter
  * (usemart.net/api/visits). The phone reads it directly, so it keeps working while the PC is off. Totals only: the counter keeps no addresses or cookies.
  * v25 AD COUNTS (Scott 11/04: "i like scott hub tracking amount of adds daily weekly monthly"): posts out today, this week and this month, in all and per business, from mh().ad_counts. "as of" shows
@@ -1349,7 +1351,8 @@ const SHEETS = {
   }],
   claude: ["🤖 Claude", () => {
     const off = pcStale(), dp = !!store.get(K_DEC), taken = new Set(arr(mh().ideas_taken));
-    let h = `<a class="pay claudego" href="https://claude.ai/code" target="_blank" rel="noopener">Talk to Claude</a>`;
+    let h = typeof aipSection === "function" ? aipSection() : "";     // v43: Claude's build list first (aiprojects.js), moved here from Day Hub
+    h += sec("💬 Talk to Claude") + `<a class="pay claudego" href="https://claude.ai/code" target="_blank" rel="noopener">Talk to Claude</a>`;
     h += `<p class="note">${off ? "Your PC looks off or quiet" + (mh().generated_at ? " (last report " + esc(ago(ageMin(mh().generated_at))) + ")" : "") + ". Claude runs on the PC, so it can't answer until the PC is back. Save your idea below." : "Your PC is on. Your session shows in the list once /rc is running on the PC."}</p>`;
     h += sec("Save an idea");
     h += `<form data-ideaform class="ideaform"><textarea name="idea" rows="4" maxlength="${IDEA_TEXT}" placeholder="Type your idea" aria-label="Your idea">${esc(store.get(K_IDEADRAFT) || "")}</textarea><button type="submit" class="pay">Save idea</button></form>`;
@@ -1358,7 +1361,7 @@ const SHEETS = {
     if (rows.length) h += sec("Your ideas");
     h += rows.map(i => row(i.text, taken.has(i.id) ? "✓ On your PC" : i.sent ? "Saved online" : "Waiting to send", new Date(i.at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/Chicago" }))).join("");
     return h;
-  }],
+  }, true],     // v43: opens before the first snapshot too - the list and the idea box don't need it
   hublooks: ["✨ New looks", () => {
     let h = `<p class="note">Turns a Hub's new look on or off for this phone only. Customers still see the old look.</p>`;
     HUB_LOOKS.forEach(([id, name]) => {
@@ -1870,7 +1873,10 @@ function tileList() {
         : far && CAL.birthdays_from && CAL.birthdays_from.contacts === false ? "Contacts birthdays not found"
         : far ? "none saved in the next 12 months" : CAL && CAL.more ? "calendar list cut short - may be missing some" : "none in the next 7 days", bday ? "warn" : "");
   const ideaWait = ideasUnsent().length;     // v23
-  add("claude", "🤖", "Claude", pcStale() ? "PC off" : "PC on", "", ideaWait ? ideaWait + " TO SEND" : "", ideaWait ? "old" : "", "talk to Claude · save an idea", "");
+  const ac = typeof aipCounts === "function" ? aipCounts() : null;     // v43: Claude's list on the tile
+  add("claude", "🤖", "Claude", ac && ac.any ? String(ac.waiting + ac.working) : pcStale() ? "PC off" : "PC on", ac && ac.any ? "on the list" : "",
+      ideaWait ? ideaWait + " TO SEND" : ac && ac.doneToday ? ac.doneToday + " DONE TODAY" : "", ideaWait ? "old" : "",
+      ac && ac.any ? (ac.working ? ac.working + " being built · " : "") + ac.waiting + " waiting · " + (pcStale() ? "PC off" : "PC on") : "talk to Claude · save an idea", "");
   const vw = viewData();     // v24: one square per site
   VIEW_SITES.forEach(([s, name, icon]) => {
     const d = vw[s];

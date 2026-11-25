@@ -279,3 +279,22 @@ body.tl .needs li.more { padding: 6px 12px; font-size: 13px; }
 .st-stale { color: #d97706 !important; font-weight: 700; margin-bottom: 4px !important; }
 .st-legend { margin-top: 6px !important; font-size: 11.5px !important; }
 @media (max-width: 360px) { .st-c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .st-c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* v43 Claude's list (aiprojects.js) */
+.aip-sum { font-size: 14px; margin: 6px 0 10px; }
+.aip-new { display: grid; gap: 6px; margin: 8px 0 12px; }
+.aip-new input, .aip-new textarea { width: 100%; box-sizing: border-box; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; font: inherit; font-size: 15px; }
+.aip-new .pay { justify-self: start; }
+.aip-h { margin: 14px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.aip-list { list-style: none; margin: 0; padding: 0; }
+.aip-row { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.aip-mark { flex: none; font-size: 18px; line-height: 1.3; }
+.aip-main { min-width: 0; flex: 1; overflow-wrap: anywhere; font-size: 15px; }
+.aip-main small { display: block; color: var(--muted); font-size: 12.5px; }
+.aip-notes { white-space: pre-wrap; }
+.aip-reply { display: block; margin-top: 5px; padding: 6px 8px; border-radius: 4px; background: rgba(46, 204, 113, .12); font-size: 14px; }
+.aip-row.done b { opacity: .75; }
+.aip-acts { display: flex; gap: 6px; margin-top: 6px; }
+button.chip { font: inherit; cursor: pointer; }
+.chip.armed { background: var(--warn); color: #1a1000; }
+.note.warn { color: var(--warn); }
