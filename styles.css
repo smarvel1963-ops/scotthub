@@ -315,3 +315,14 @@ button.chip { font: inherit; cursor: pointer; }
 .dh-box .pay { margin: 8px 0 4px; }
 .dh-box .aip-row { align-items: center; }
 .dh-box .aip-acts { margin-top: 0; }
+/* v46 What's wrong: one row per problem on a tile, tap = go to it */
+.iss-row { display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box; text-align: left; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 12px; padding: 11px 12px; margin: 0 0 8px; font: inherit; font-size: 15px;
+  font-weight: 600; cursor: pointer; text-decoration: none; touch-action: manipulation; }
+.iss-row:active { transform: scale(.99); }
+.iss-row.bad { border-left-color: var(--bad); } .iss-row.warn { border-left-color: var(--warn); }
+.iss-l { min-width: 0; overflow-wrap: anywhere; }
+.iss-row small { display: block; color: var(--muted); font-weight: 400; font-size: 12.5px; margin-top: 2px; }
+.iss-go { margin-left: auto; white-space: nowrap; font-size: 13px; font-weight: 800; color: var(--muted); }
+.iss-all { display: block; width: 100%; margin-top: 6px; padding: 10px; font-size: 15px; border-radius: 12px; }
+.iss-hl { outline: 2px solid var(--warn); outline-offset: 2px; border-radius: 8px; background: rgba(245,179,1,.14); }

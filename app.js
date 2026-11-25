@@ -56,6 +56,12 @@
  * v23 TALK TO CLAUDE + IDEA BOX (Scott 11/04: "i need to be able to communicate back and forth with you on scott hub" / "i have idea outside of
  * the office all the time" / "yes build both"): a tile that opens his Claude session (Claude Code's own Remote Control runs it on the PC; nothing here
  * can reach the PC), and a box for ideas. An idea is kept on this phone until the relay holds it, so no signal or a PC that's off loses nothing.
+ * v46 ISSUE LIST (Scott 11/25: "So on Scott hub you hit a square there is issue on it opens list of the data in issue you should be able to
+ * click that and go to where you can fix or see issue"), tiles look: a tile with a problem (red / amber edge, plus Ads with a failed post and
+ * Email with an inbox off) opens "What's wrong" first - one row per problem from the data the tile already reads (each red alert, bot down,
+ * failing server check, the money shortfall + things to chase, each game to grade, each approval, each UseMart item, a birthday today, each
+ * failed ad, each inbox off). A row opens the sheet that holds it, scrolled to it and lit up (Fix it card, Yes / No, the row), or UseMart's
+ * Reply link built from the checked id (issueRows / issueJump). "See everything" opens the old sheet; a tile with nothing wrong opens its sheet as before.
  * v44 USEMART ITEM VIEWS (Scott 11/24): today / yesterday / 7 days / all time under the traffic graph at the top (ivHtml).
  * v43 CLAUDE'S LIST (Scott 11/24: "move my list to scott hub that app shouls communicate with ai all the time"): Scott's build list
  * for Claude moved here from Day Hub - aiprojects.js draws it at the top of the Claude sheet and keeps it current every 2 minutes.
@@ -1384,6 +1390,14 @@ const SHEETS = {
 };
 
 function openSheet(key) {
+  if (/^issue:/.test(key)) {         // v46 What's wrong - a refresh with nothing left wrong drops back to the full sheet
+    const k = key.slice(6), L = issueRows(k);
+    if (!L.length) { $("#sheet").dataset.key = k; openSheet(k); return; }
+    $("#sheetTitle").textContent = "⚠️ What's wrong · " + (ISS_NAME[k] || k);
+    $("#sheetBody").innerHTML = issueSheet(k, L);
+    $("#sheet").classList.remove("hidden");
+    return;
+  }
   const app = /^app:/.test(key) ? shApp(key.slice(4)) : null;      // v33 one Marvel Corp app
   const s = app ? [app.name, () => shAppPage(app), true] : SHEETS[key];
   if (!s) return;
@@ -1613,7 +1627,7 @@ function render() {
 // ── v21 UPDATE READY ──
 // The worker fetches new files when the app is OPENED, but a phone resumes an app left open on its old code. version.json says
 // what's published; a mismatch shows the button at the top of the front screen, in both looks.
-const VERSION = "45";   // v45 11/24: a mic at the right end of every typing box (/dayhub/voicefill.js; Scott "all aps must have microphone to right on any box") + "Send an app to someone" under the Apps list, Whop links (/dayhub/appsend.js; Scott "forward app install to anyone but sending them to app on whop")   // v44 11/24: UseMart item views at the top (that commit also fixed v43, which left this at 42)   // v42 11/22: Sites & services boxes by group + importance, and top graphs (sites up, page speed, visitors by site) (Scott via Desktop: "Yes, build it i want a few more graphs at top and the square devided by improtance nd group they blong in")   // v41 11/21: traffic graph at the top + Traffic sheet (Scott "like that lil graph to be at top", "by place")   // v40 11/21: "This week" scoreboard band - one number per team (Scott "yes sir lets take what makes sense")   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
+const VERSION = "46";   // v46 11/25: a tile with a problem opens What's wrong first - one row per problem, tap one to go fix or see it (Scott "you should be able to click that and go to where you can fix or see issue")   // v45 11/24 (was "45"): v45 11/24: a mic at the right end of every typing box (/dayhub/voicefill.js; Scott "all aps must have microphone to right on any box") + "Send an app to someone" under the Apps list, Whop links (/dayhub/appsend.js; Scott "forward app install to anyone but sending them to app on whop")   // v44 11/24: UseMart item views at the top (that commit also fixed v43, which left this at 42)   // v42 11/22: Sites & services boxes by group + importance, and top graphs (sites up, page speed, visitors by site) (Scott via Desktop: "Yes, build it i want a few more graphs at top and the square devided by improtance nd group they blong in")   // v41 11/21: traffic graph at the top + Traffic sheet (Scott "like that lil graph to be at top", "by place")   // v40 11/21: "This week" scoreboard band - one number per team (Scott "yes sir lets take what makes sense")   // v39 11/20: eBay + other sites' sales, offers and buyer questions on Email (Scott "let me know on questions and sales")   // v38 11/20: Daily checks panel (Scott via Desktop: "Yes, build it")   // v37 11/20: eBay tile + sheet (Scott "also an ebay info box to my scott hub")   // v36 11/20: Family Hub $25/yr after 30 free days (Scott "Yes, fix all 3")   // v35 11/18: Job Hub $4.99/mo after 30 free days (Scott "4.99 month")   // v34 11/17: Job Hub in the Apps square (Scott via Desktop: "Yes, add it")
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -1915,8 +1929,10 @@ function tileList() {
   add("email", "📧", "Email", String(em.important_count ?? "-"), "important", mw ? mw + " BUYER" + (mw > 1 ? "S" : "") + " WAITING" : dead ? dead + " INBOX OFF" : "",
       mw ? "pos" : dead ? "old" : "",
       (em.recruiter_count || 0) + " recruiter" + (em.recruiter_count === 1 ? "" : "s") + " · " + (em.job_alerts || 0) + " job alerts");
+  T[T.length - 1].iss = dead > 0;      // v46: an inbox that can't be read opens What's wrong first
   const adRows = [].concat(...arr((d.ads || {}).sections).filter(s => /^ADS/i.test(s.title)).map(s => arr(s.rows))), adBad = adRows.filter(r => r.state === "FAILED").length;
   add("ads", "📣", "Ads", adRows.length ? (adRows.length - adBad) + "/" + adRows.length : "-", "ran", adRows.length ? adBad ? adBad + " FAILED" : "ALL RAN" : "", adBad ? "neg" : "pos", "yesterday's posting");
+  T[T.length - 1].iss = adBad > 0;     // v46: failed posts open What's wrong first (the Ads posted tile below never does)
   const adT = obj(obj(m.ad_counts).total);    // v25
   if (obj(m.ad_counts).total) add("ads", "📊", "Ads posted", String(adT.today || 0), "today", adCountOld() ? "OLD" : "", adCountOld() ? "old" : "", (adT.week || 0) + " this week · " + (adT.month || 0) + " this month");
   const bz = d.business || {}, fn = bz.funnel || {}, dc = obj(obj(bz.followers).discord).count, bk = arr(bz.books)[0];
@@ -1954,13 +1970,100 @@ function renderTiles() {
     const rest = all.slice(TL_FIXED).map((t, i) => ({ t, i, n: useCount(u, t.open) }));
     if (rest.reduce((s, x) => s + x.n, 0) >= LEARN_AFTER) rest.sort((a, z) => z.n - a.n || a.i - z.i);
     g.innerHTML = fixed.concat(rest.map(x => x.t)).map(t =>
-      `<div class="tl-t${t.alarm ? " " + t.alarm : ""}" data-open="${esc(t.open)}" role="button" tabindex="0">` +
+      `<div class="tl-t${t.alarm ? " " + t.alarm : ""}" data-open="${esc(t.open)}"${tileHasIssues(t) ? ' data-issue="1"' : ""} role="button" tabindex="0">` +
       `<div class="tl-k"><span>${t.icon}</span>${esc(t.title)}</div>` +
       `<div class="tl-v">${esc(t.value)}${t.unit ? `<small>${esc(t.unit)}</small>` : ""}</div>` +
       (t.chip ? `<span class="tl-c ${esc(t.tone || "")}">${esc(t.chip)}</span>` : "") +
       (t.sub ? `<div class="tl-s">${esc(t.sub)}</div>` : "") + `</div>`).join("");
   } catch (e) { g.innerHTML = `<div class="tl-t warn">Tiles hit a snag: ${esc(e.message || e)} - Classic still has everything.</div>`; }
 }
+// v46 ISSUE LIST (Scott 11/25: "you hit a square there is issue on it opens list of the data in issue you should be able to click
+// that and go to where you can fix or see issue"). A tile with a problem opens "What's wrong" first: one row per problem, from the
+// same data the tile reads. A row opens the sheet that holds it, scrolled to it and lit up (the Fix it card, the Yes / No, the row),
+// or UseMart's Reply link, built here from the item's checked id like the UseMart sheet does. "See everything" = the old sheet.
+// A tile with nothing wrong opens its sheet exactly as before.
+const ISS_NAME = { health: "Systems", server: "Server", money: "Money", games: "Games", approvals: "Approvals", usemart: "UseMart",
+  dates: "Birthdays", ads: "Ads", email: "Email" };
+// a row: t = what, s = one line under it, c = bad | warn, go = [sheet, section starts with, row holds this text] or href = a link built here
+function issueRows(key) {
+  const L = [], add = (c, t, s, go, act, href) => L.push({ c, t, s, go, act, href });
+  if (!DATA) return L;
+  const m = mh(), d = dk();
+  if (key === "health") {
+    const on = serverOn(), h = m.health || {}, pc = h.pc || {}, sv = h.server || {};
+    if (on) add("warn", "PC is off - the server is reporting", "PC quiet since " + (m.generated_at ? t12(m.generated_at) : "?"), ["health", "🖥️ PC off", ""]);
+    else if (pcStale()) add("warn", "PC hasn't reported", "last report " + ago(ageMin(m.generated_at)), ["health", "PC", "Snapshot"]);
+    const fl = fx().enabled ? fxList().filter(f => !f.status || f.status === "open") : [];
+    (on ? svAlerts(sv13()) : healthAlerts().shown).filter(a => a && a.severity === "FAIL").forEach(a => {
+      const f = fl.find(x => x.title === a.title);
+      if (f) add("bad", a.title, (a.detail ? a.detail + " · " : "") + "Fix it is ready to tap", ["health", "🔧 Fix it", f.id + " · "], "Fix it");
+      else add("bad", a.title, a.detail || "red alert", ["health", on ? "Server alerts" : "Alerts", a.title]);
+    });
+    Object.entries(on ? obj(sv13().bots) : obj(sv.bots)).filter(([, up]) => up !== true).forEach(([k]) =>
+      add("bad", "Bot down: " + k, on ? "from the server's own report" : "from the PC's check", ["health", on ? "🖥️ PC off" : "Server", k]));
+    if (!on && sv.alive === false) add("bad", "Server not checking in", "heartbeat " + ago(sv.heartbeat_age_min), ["health", "Server", "Server"]);
+    if (!on && pc.active === false) add("bad", "MasterHub app not running", "heartbeat " + ago(pc.heartbeat_age_min), ["health", "PC", "MasterHub app"]);
+  } else if (key === "server") {
+    srvChecks().list.filter(x => x[1] === false).forEach(([n, , dt]) => add(n === "Server up" ? "bad" : "warn", n + ": problem", dt, ["server", "Checks", n]));
+  } else if (key === "money") {
+    if (!finHave()) return L;
+    const F = fin(), tp = obj(F.till_payday);
+    if (Number(tp.total) < 0) add("bad", "Short " + money(-Number(tp.total)) + " till payday", isYmd(F.next_payday) ? "payday " + dayName(F.next_payday) : "", ["money", "⏳ Till payday", ""]);
+    arr(F.chase).filter(c => c && typeof c === "object" && c.title).forEach(c => add("warn", "Chase: " + c.title, c.detail || "", ["money", "🔎 Things to chase", c.title]));
+  } else if (key === "games") {
+    gamesToday().filter(x => x.state === "wait").forEach(x => add("warn", x.sport + " · " + x.game, "started " + gameWhen(x) + " · " + x.open + " to grade", ["games", "⏳ Waiting", x.sport + " · " + x.game]));
+  } else if (key === "approvals") {
+    if (!ap().enabled) return L;
+    apWaiting().forEach(q => add("warn", q.id + " · " + q.ask, q.rec ? "Claude says: " + q.rec : "", ["approvals", "Waiting on you", q.id + " · "], "Yes / No"));
+  } else if (key === "usemart") {
+    if (!umHave()) return L;
+    const age = umAge();
+    if (age != null && age > UM_STALE_MIN) add("warn", "No word from UseMart in " + ago(age).replace(/ ago$/, ""), "the numbers may be old", ["usemart", "", ""]);
+    umItems().slice().sort((a, z) => (z.over_24h ? 1 : 0) - (a.over_24h ? 1 : 0)).forEach(x =>
+      add(x.over_24h ? "bad" : "warn", x.name + " · " + x.topic, "waiting " + ago(Number(x.age_min)).replace(/ ago$/, "") + (x.over_24h ? " · over 24 h" : ""), null, "Reply ↗",
+          UM_REPLY + encodeURIComponent(String(x.id).toLowerCase())));      // the id passed umItems' plain-id check
+  } else if (key === "dates") {
+    dateEvents().filter(e => dateIn(e) === 0).forEach(e => add("warn", "Today: " + dateWho(e), e.title, ["dates", "This week", e.title]));
+  } else if (key === "ads") {
+    arr((d.ads || {}).sections).filter(s => s && /^ADS/i.test(s.title || "")).forEach(s => arr(s.rows).filter(r => r && r.state === "FAILED").forEach(r =>
+      add("bad", "Failed: " + r.task, [r.detail, r.fix ? "fix: " + r.fix : ""].filter(Boolean).join(" · ") || s.title, ["ads", s.title, r.task])));
+  } else if (key === "email") {
+    arr((d.email || {}).inboxes).filter(i => i && i.status && i.status !== "ok").forEach(i =>
+      add("warn", "Inbox off: " + i.inbox, (i.error || "can't be read") + " - mail there isn't being checked", ["email", "Inboxes", i.inbox]));
+  }
+  return L;
+}
+function tileHasIssues(t) {
+  if (!(t.alarm || t.iss) || !ISS_NAME[t.open]) return false;
+  try { return issueRows(t.open).length > 0; } catch (e) { return false; }
+}
+function issueSheet(key, L) {
+  let h = `<p class="note">Tap one to fix it or see it.</p>`;
+  h += L.map(r => {
+    const inner = `<span class="iss-l">${esc(r.t)}${r.s ? `<small>${esc(r.s)}</small>` : ""}</span><span class="iss-go">${esc(r.act || "See ›")}</span>`;
+    return r.href ? `<a class="iss-row ${r.c}" href="${esc(r.href)}" target="_blank" rel="noopener">${inner}</a>`
+      : `<button class="iss-row ${r.c}" data-issgo="${esc(r.go[0])}" data-isssec="${esc(r.go[1])}" data-issfind="${esc(r.go[2])}">${inner}</button>`;
+  }).join("");
+  return h + `<button class="pay undo iss-all" data-issall="${esc(key)}">See everything</button>`;
+}
+// Open a sheet and light up the item: first the matching row after a section header that starts with `sec`, then anywhere.
+// No `find` = the section header itself. Nothing found = the sheet opens at its top, nothing lost.
+function issueJump(key, sec, find) {
+  $("#sheet").dataset.key = key; openSheet(key);
+  const body = $("#sheetBody"), sc = body.closest(".sheet-body"), low = s => String(s || "").trim().toLowerCase();
+  if (sc) sc.scrollTop = 0;
+  const els = [...body.querySelectorAll(".sec, .row, .ap-q")];
+  const look = scoped => { let inSec = !scoped;
+    for (const el of els) {
+      if (el.classList.contains("sec")) { inSec = !scoped || low(el.textContent).startsWith(low(sec)); if (inSec && scoped && !find) return el; continue; }
+      if (inSec && find && el.textContent.includes(find)) return el;
+    } return null; };
+  const el = (sec && look(true)) || (find && look(false));
+  if (!el) return;
+  el.classList.add("iss-hl");
+  if (el.scrollIntoView) el.scrollIntoView({ block: "center" });
+}
+
 function setLook(look) {
   store.set(K_LOOK, look);
   learnEvent("view", { key: "look|" + look, open: "look" + look });     // relay v6: open must be a-z only, 12 max
@@ -2014,10 +2117,17 @@ document.addEventListener("click", e => {
     renderNeeds();
     return;
   }
+  const ig = e.target.closest("[data-issgo]"), ia = e.target.closest("[data-issall]");     // v46 What's wrong rows
+  if (ig) { issueJump(ig.dataset.issgo, ig.dataset.isssec, ig.dataset.issfind); return; }
+  if (ia) { $("#sheet").dataset.key = ia.dataset.issall; openSheet(ia.dataset.issall); const sc = $("#sheetBody").closest(".sheet-body"); if (sc) sc.scrollTop = 0; return; }
   const o = e.target.closest("[data-open]");
   if (o) {
     if (o.dataset.key) hideCard(o.dataset.key, "open");   // v17: opening a card says it matters
     recordUse(o.dataset.open);
+    if (o.dataset.issue && issueRows(o.dataset.open).length) {      // v46: a tile with a problem lists the problems first
+      const k = "issue:" + o.dataset.open; $("#sheet").dataset.key = k; openSheet(k);
+      const sc = $("#sheetBody").closest(".sheet-body"); if (sc) sc.scrollTop = 0; return;
+    }
     $("#sheet").dataset.key = o.dataset.open; openSheet(o.dataset.open); return;
   }
   const a = e.target.closest("[data-act]");
