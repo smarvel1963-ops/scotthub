@@ -63,6 +63,10 @@
  * failed ad, each inbox off). A row opens the sheet that holds it, scrolled to it and lit up (Fix it card, Yes / No, the row), or UseMart's
  * Reply link built from the checked id (issueRows / issueJump). "See everything" opens the old sheet; a tile with nothing wrong opens its sheet as before.
  * v47 GAMES AMBER (Scott 11/25: "make games amber whenever any waiting"): any game waiting on a grade turns the Games tile amber, so it opens What's wrong.
+ * v48 USEMART.NET WATCH (Scott 11/26, after usemart.net was down 9:42 PM -> 10:30 AM unseen: "Yes, set it up" + "should be one of watchers on
+ * Scott Hub"): relay v11 checks usemart.net + its database every 10 min and emails his Gmail when it's down 10+ min and when it's back.
+ * Here: a "usemart.net alert" row on the Server sheet (on / site DOWN / can't check, last check), a red "usemart.net is DOWN" card, the UseMart
+ * tile turns red SITE DOWN, and its What's wrong list leads to the alert row (umWatch / umDown read parts.watch.usemart).
  * v44 USEMART ITEM VIEWS (Scott 11/24): today / yesterday / 7 days / all time under the traffic graph at the top (ivHtml).
  * v43 CLAUDE'S LIST (Scott 11/24: "move my list to scott hub that app shouls communicate with ai all the time"): Scott's build list
  * for Claude moved here from Day Hub - aiprojects.js draws it at the top of the Claude sheet and keeps it current every 2 minutes.
@@ -208,6 +212,9 @@ function srvChecks() {
     ["Drives synced", bots.drive_watchdog === false ? false : hb == null ? null : fresh, (bots.drive_watchdog === true ? "Drive watchdog up · " : bots.drive_watchdog === false ? "Drive watchdog DOWN · " : "") + "server to PC through Drive " + ago(hb)]] };
 }
 const watchOn = () => { const W = obj(DATA && DATA.watch), a = ageMin(W.checked_at); return a != null && a <= 25 ? W : null; };   // relay v10
+// v48: relay v11's usemart.net watch (parts.watch.usemart) - only while it checked in the last 25 min (an old relay sends none -> null)
+const umWatch = () => { const W = obj(DATA && DATA.watch && DATA.watch.usemart), a = ageMin(W.checked_at); return a != null && a <= 25 ? W : null; };
+const umDown = () => { const W = umWatch(); return !!W && W.state === "down"; };
 // v31: a real sale email, per platform (Whop also mails announcements, e.g. "New subscribers can pay in their local currency")
 const SALE_RE = /new subscriber|new member|new sale|made a sale|payment received|purchase|payout|renewed/i, NOT_SALE_RE = /can pay in|local currency|webinar|newsletter/i;
 const salesOf = p => arr(obj(obj(dk().email).sales).rows).filter(r => r && r.platform === p && SALE_RE.test(r.subject || "") && !NOT_SALE_RE.test(r.subject || ""));
@@ -620,6 +627,8 @@ function needs() {
     const g = umSurge(), why = umStrain(g);   // v29
     if (!(age != null && age > UM_STALE_MIN) && why.length) add("bad", "🛒 UseMart is under strain", why.join(" · ") + (g.core_mode ? " · core mode is ON" : " · tap for numbers"), "usemart");
   }
+  if (umDown()) { const U = umWatch();      // v48: relay v11 saw usemart.net down 10+ min
+    add("bad", "🛒 usemart.net is DOWN" + (U.since ? " since " + t12(U.since) : ""), (U.why ? U.why + " · " : "") + "you got an email · tap for the alert", "server"); }
   const qs = ap().enabled ? apWaiting() : [];
   if (qs.length) add("warn", "🗳️ " + qs.length + " question" + (qs.length > 1 ? "s" : "") + " from Claude", qs.slice(0, 2).map(q => q.id + " " + q.ask).join(" · "), "approvals");
   const ready = fx().enabled ? fxList().filter(f => f.status === "fix_ready") : [];
@@ -1046,7 +1055,13 @@ const SHEETS = {
     h += sec("Alert if the server goes down");
     h += W ? row("Email alert", W.state === "down" ? "server DOWN" : "on", (W.state === "down" && W.since ? "down since " + when(W.since) + " · " : "") + "checked " + ago(ageMin(W.checked_at)) + " · emails your Gmail", W.state === "down" ? "neg" : "pos")
            : row("Email alert", "not on yet", "the relay's server watch hasn't run yet");
-    return h + `<p class="note">The PC checks the server every 5 minutes; with the PC off, the server reports on itself. The relay looks every 10 minutes and emails you once when the server goes quiet, and again when it's back. More detail: Systems.</p>`;
+    const U = umWatch();      // v48
+    h += sec("Alert if usemart.net goes down");
+    h += U ? row("usemart.net alert", U.state === "down" ? "site DOWN" : U.note ? "can't check" : "on",
+                 (U.state === "down" ? (U.since ? "down since " + when(U.since) + " · " : "") + (U.why ? U.why + " · " : "") : U.note ? U.note + " · " : "") +
+                 "checked " + ago(ageMin(U.checked_at)) + " · emails your Gmail", U.state === "down" ? "neg" : U.note ? "" : "pos")
+           : row("usemart.net alert", "not on yet", "the relay's usemart.net watch hasn't run yet");
+    return h + `<p class="note">The PC checks the server every 5 minutes; with the PC off, the server reports on itself. The relay looks every 10 minutes and emails you once when the server goes quiet, and again when it's back. It also checks usemart.net and its database every 10 minutes and emails you when the site has been down 10 minutes, and again when it's back. More detail: Systems.</p>`;
   }],
   winible: ["🎟️ Winible", () => {      // v31
     const W = salesOf("Winible");
@@ -1919,8 +1934,9 @@ function tileList() {
   }
   if (umHave()) {
     const U = um(), n = Number(U.waiting) || 0, late = Number(U.over_24h) || 0, it = umItems()[0], age = umAge(), old = age != null && age > UM_STALE_MIN;
-    add("usemart", "🛒", "UseMart", String(n), "waiting", late ? late + " OVER 24 H" : old ? "OLD" : "", late ? "neg" : old ? "old" : "",
-        old ? "last update " + ago(age) : it ? it.name + ": " + it.topic : "all answered", late ? "bad" : n || old ? "warn" : "");
+    const sd = umDown();      // v48: the site itself is down (relay v11) - that outranks everything on this tile
+    add("usemart", "🛒", "UseMart", String(n), "waiting", sd ? "SITE DOWN" : late ? late + " OVER 24 H" : old ? "OLD" : "", sd || late ? "neg" : old ? "old" : "",
+        sd ? "usemart.net is down" : old ? "last update " + ago(age) : it ? it.name + ": " + it.topic : "all answered", sd || late ? "bad" : n || old ? "warn" : "");
   }
   add("bets", "📆", "Last 7 days", units(wk.units), "", wk.win_pct != null ? wk.win_pct + "%" : "", pill(wk.units), wk.record || "");
   add("bets", "⭐", "Top 5", t5.wins != null ? t5.wins + "-" + t5.losses + "-" + t5.pushes : "-", "", t5.units != null ? units(t5.units) : "", pill(t5.units), t5.since ? "since " + dayName(t5.since) : "");
@@ -2018,6 +2034,8 @@ function issueRows(key) {
     if (!ap().enabled) return L;
     apWaiting().forEach(q => add("warn", q.id + " · " + q.ask, q.rec ? "Claude says: " + q.rec : "", ["approvals", "Waiting on you", q.id + " · "], "Yes / No"));
   } else if (key === "usemart") {
+    if (umDown()) { const W = umWatch();      // v48
+      add("bad", "usemart.net is DOWN" + (W.since ? " since " + t12(W.since) : ""), W.why || "", ["server", "Alert if usemart.net goes down", "usemart.net alert"]); }
     if (!umHave()) return L;
     const age = umAge();
     if (age != null && age > UM_STALE_MIN) add("warn", "No word from UseMart in " + ago(age).replace(/ ago$/, ""), "the numbers may be old", ["usemart", "", ""]);

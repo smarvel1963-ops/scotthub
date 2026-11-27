@@ -7,7 +7,8 @@
  *   PC  --(write key + snapshot part)--> relay  (stored in Script Properties)
  *   phone --(read pass)--> relay --> the latest parts
  * It is NOT the Day Hub AI relay (customers use that one) and it never calls
- * any outside service — no AI, no Whop, nothing that costs money.
+ * a paid outside service — no AI, no Whop, nothing that costs money. (v11: it reads
+ * usemart.net's two public status pages every 10 minutes, nothing else.)
  *
  * ONE Script Property, pasted by Scott (any capitals):
  *   SCOTT_HUB = {"write":"<PC key>","read":"<phone pass>"}
@@ -60,6 +61,15 @@
  * this script's own Google account (Scott's Gmail), so the Gmail app on his phone rings. "get" also returns parts.watch = {state, since,
  * checked_at} so the phone can show the alert is on. Turn it on: run installServerWatch() once in the editor (it asks for the
  * "send email" + "triggers" permissions); removeServerWatch() turns it off. Nothing else changes.
+ *
+ * v11 (Scott 11/26, after usemart.net was down 9:42 PM -> 10:30 AM and nobody knew: "Yes, set it up" to a phone alert when it's
+ * down 10+ minutes, "should be one of watchers on Scott Hub"): USEMART SITE WATCH, in the same 10-minute trigger. It reads
+ * https://usemart.net/api/health (the site + the UseMart program answer) and /api/traffic (the database answers). Bad = no answer,
+ * a 5xx, or health without ok:true. DOWN = still bad on a check 8+ minutes after the first bad one (two checks in a row - a blip
+ * never mails). One email when it goes down, one when it's back, to the same Gmail. 403 / 429 = usemart.net turned the watch
+ * away: "can't check", never a strike and never "up". "get" -> parts.watch.usemart = {state, since, why, checked_at, code, note}.
+ * Needs one more permission (connect to an outside site), so run installServerWatch() once after this goes in and click Allow.
+ * A UseMart check that throws never stops the server watch.
  * Tasks (POST, body JSON):
  *   {task:"put",    key, part:"masterhub"|"desktop", data:{...}}             PC
  *   {task:"put",    key:<server key>, part:"server", data:{...}}             server (v4)
@@ -182,6 +192,9 @@ function serverState(P) {
 }
 function checkServer() {
   const P = PropertiesService.getScriptProperties();
+  let um = null;
+  try { um = checkUseMart(P); }            // v11 - its own try: a UseMart problem never stops the server watch below
+  catch (err) { P.setProperty("um_note", "the watch itself failed: " + cutChars(String(err && err.message || err), 200)); }
   const st = serverState(P), was = P.getProperty("watch_state") || "up", strikes = Number(P.getProperty("watch_strikes") || 0);
   P.setProperty("watch_checked_at", new Date().toISOString());
   if (st.down) {
@@ -200,14 +213,80 @@ function checkServer() {
       mailMe("✅ CMMG server is back", "It's checking in again" + (since ? " (it looked down since " + since + ")" : "") + ".");
     }
   }
+  Logger.log(JSON.stringify({ server: st, usemart: um }));
   return st;
 }
-function mailMe(subject, body) {
-  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), subject, body + "\n\n- Scott Hub relay, server watch (every 10 min)");
+function mailMe(subject, body, what) {
+  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), subject, body + "\n\n- Scott Hub relay, " + (what || "server watch") + " (every 10 min)");
 }
 function watchInfo(P) {
   return { state: P.getProperty("watch_state") || "up", since: P.getProperty("watch_since") || null,
-           why: P.getProperty("watch_why") || null, checked_at: P.getProperty("watch_checked_at") || null };
+           why: P.getProperty("watch_why") || null, checked_at: P.getProperty("watch_checked_at") || null,
+           usemart: { state: P.getProperty("um_state") || "up", since: P.getProperty("um_since") || null, why: P.getProperty("um_why") || null,
+                      checked_at: P.getProperty("um_checked_at") || null, code: Number(P.getProperty("um_code") || 0) || null,
+                      note: P.getProperty("um_note") || null } };       // v11
+}
+
+// ---------------------------------------------------------------- v11 USEMART SITE WATCH (see the header)
+const UM_HEALTH_URL = "https://usemart.net/api/health";
+const UM_DB_URL = "https://usemart.net/api/traffic";
+const UM_DOWN_AFTER_MIN = 8;       // still bad 8+ min after the first bad check = the next 10-minute check
+function fetchCode(url) {
+  try {
+    const r = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true, headers: { "Cache-Control": "no-cache" } });
+    return { code: r.getResponseCode(), text: cutChars(r.getContentText(), 4000) };
+  } catch (err) {
+    return { code: 0, text: cutChars(String(err && err.message || err), 300) };
+  }
+}
+function usemartState() {
+  const h = fetchCode(UM_HEALTH_URL);
+  if (h.code === 403 || h.code === 429) return { state: "unknown", code: h.code, why: "usemart.net turned the watch away (" + h.code + "), so it can't tell from here" };
+  let j = null;
+  try { j = JSON.parse(h.text); } catch (e) { j = null; }
+  if (h.code !== 200 || !j || j.ok !== true) {
+    const why = h.code === 502 ? "usemart.net answers 502: nothing is running behind Cloudflare (the UseMart program or its database stopped)"
+              : h.code === 524 ? "usemart.net answers 524: the server took too long to answer"
+              : h.code ? "usemart.net answers " + h.code
+              : "usemart.net did not answer (" + cutChars(h.text, 120) + ")";
+    return { state: "down", code: h.code, why: why };
+  }
+  const d = fetchCode(UM_DB_URL);
+  if (d.code === 0 || d.code >= 500) return { state: "down", code: d.code, build: j.build || "", why: "The site answers but its database doesn't (" + (d.code || "no answer") + " from /api/traffic)" };
+  return { state: "up", code: 200, build: j.build || "", why: "" };
+}
+function ctTime(iso) {             // "9:42 PM Wed Nov 25 CT" - Scott's own time
+  try { return Utilities.formatDate(new Date(iso), "America/Chicago", "h:mm a EEE MMM d") + " CT"; } catch (e) { return String(iso); }
+}
+function checkUseMart(P) {
+  const st = usemartState(), nowIso = new Date().toISOString(), was = P.getProperty("um_state") || "up";
+  P.setProperty("um_checked_at", nowIso);
+  P.setProperty("um_code", String(st.code || 0));
+  if (st.state === "unknown") { P.setProperty("um_note", st.why); return st; }     // neither a strike nor a clear
+  P.deleteProperty("um_note");
+  if (st.state === "down") {
+    const first = P.getProperty("um_first_bad") || nowIso;
+    P.setProperty("um_first_bad", first);
+    const badMin = (Date.now() - new Date(first).getTime()) / 60000;
+    if (was !== "down" && badMin >= UM_DOWN_AFTER_MIN) {
+      P.setProperty("um_state", "down");
+      P.setProperty("um_since", first);
+      P.setProperty("um_why", st.why);
+      mailMe("⚠️ usemart.net is DOWN", st.why + ".\n\nBad on every check since " + ctTime(first) + " (" + Math.round(badMin) + " min)." +
+             "\n\nTo bring it back: Remote Desktop to the server (93.127.143.55:1097) and tell the UseMart Claude window: usemart.net is down - bring it back.",
+             "usemart.net watch");
+    }
+  } else {
+    P.deleteProperty("um_first_bad");
+    if (was === "down") {
+      const since = P.getProperty("um_since"), mins = since ? Math.round((Date.now() - new Date(since).getTime()) / 60000) : null;
+      P.setProperty("um_state", "up");
+      P.deleteProperty("um_why");
+      mailMe("✅ usemart.net is back", "It answers again" + (st.build ? " (build " + st.build + ")" : "") + (mins != null ? " - it was down about " + mins + " min, since " + ctTime(since) : "") + ".",
+             "usemart.net watch");
+    }
+  }
+  return st;
 }
 function installServerWatch() {
   removeServerWatch();
